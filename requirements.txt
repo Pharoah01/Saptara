@@ -1,0 +1,55 @@
+# Security Testing Suite Requirements - Simplified
+# Core dependencies for web security testing microservices
+
+# HTTP Client and Web Testing
+requests>=2.28.0
+urllib3>=1.26.0
+
+# Async HTTP Client for concurrent testing
+aiohttp>=3.8.0
+httpx>=0.24.0
+
+# CLI and Terminal Enhancement
+colorama>=0.4.0
+rich>=13.0.0
+click>=8.0.0
+
+# Configuration Management
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+
+# Logging
+loguru>=0.7.0
+
+# API Framework for Microservices
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+pydantic>=2.0.0
+
+# Database (for storing test results)
+sqlalchemy>=2.0.0
+alembic>=1.10.0
+
+# Testing and Validation
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Security and Cryptography
+cryptography>=40.0.0
+
+# Network and DNS
+dnspython>=2.3.0
+
+# JSON and Data Serialization
+orjson>=3.8.0
+
+# Rate Limiting and Throttling
+slowapi>=0.1.0
+
+# Monitoring and Health Checks
+psutil>=5.9.0
+prometheus-client>=0.16.0
+
+# Development and Debugging
+black>=23.0.0
+flake8>=6.0.0

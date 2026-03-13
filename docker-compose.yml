@@ -1,0 +1,117 @@
+version: '3.8'
+
+# Project SAPTARA - Seven relics. Seven roles. One system.
+# SAPTARA — a system where protection emerges from unity.
+
+services:
+  # The Orchestrator - The Conductor
+  orchestrator:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - SERVICE_NAME=orchestrator
+      - RELIC_ROLE=conductor
+      - LOG_LEVEL=INFO
+    depends_on:
+      - scanner
+      - validator
+      - simulator
+    networks:
+      - saptara-network
+
+  # The Scanner - The Seeker
+  scanner:
+    build:
+      context: .
+      dockerfile: services/scanner/Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - SERVICE_NAME=scanner
+      - RELIC_ROLE=seeker
+      - LOG_LEVEL=INFO
+    networks:
+      - saptara-network
+
+  # The Validator - The Guardian
+  validator:
+    build:
+      context: .
+      dockerfile: services/validator/Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      - SERVICE_NAME=validator
+      - RELIC_ROLE=guardian
+      - LOG_LEVEL=INFO
+    networks:
+      - saptara-network
+
+  # The Simulator - The Challenger
+  simulator:
+    build:
+      context: .
+      dockerfile: services/simulator/Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      - SERVICE_NAME=simulator
+      - RELIC_ROLE=challenger
+      - LOG_LEVEL=INFO
+    networks:
+      - saptara-network
+
+  # The Keeper - The Memory
+  database:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=saptara_knowledge
+      - POSTGRES_USER=saptara_keeper
+      - POSTGRES_PASSWORD=seven_relics_unite
+    ports:
+      - "5432:5432"
+    volumes:
+      - saptara_memory:/var/lib/postgresql/data
+    networks:
+      - saptara-network
+
+  # The Messenger - The Swift
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - saptara-network
+
+  # The Observer - The Watcher (Metrics)
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - saptara-network
+
+  # The Watcher's Vision (Dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=saptara_vision
+    volumes:
+      - saptara_vision:/var/lib/grafana
+    networks:
+      - saptara-network
+
+volumes:
+  saptara_memory:
+  saptara_vision:
+
+networks:
+  saptara-network:
+    driver: bridge
