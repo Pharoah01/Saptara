@@ -1,9 +1,15 @@
-version: '3.8'
-
 # Project SAPTARA - Seven relics. Seven roles. One system.
 # SAPTARA — a system where protection emerges from unity.
 
 services:
+  # Shared base image — built once, inherited by all four services
+  base:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: saptara-base
+    profiles: ["build-only"]   # never starts as a container, just provides the image
+
   # The Orchestrator - The Conductor
   orchestrator:
     build:
@@ -21,10 +27,15 @@ services:
       - VALIDATOR_URL=http://validator:8002
       - SIMULATOR_URL=http://simulator:8003
     depends_on:
-      - scanner
-      - validator
-      - simulator
-      - database
+      database:
+        condition: service_healthy
+      scanner:
+        condition: service_started
+      validator:
+        condition: service_started
+      simulator:
+        condition: service_started
+    restart: unless-stopped
     networks:
       - saptara-network
 
@@ -42,7 +53,9 @@ services:
       - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
       - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
     depends_on:
-      - database
+      database:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - saptara-network
 
@@ -60,7 +73,9 @@ services:
       - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
       - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
     depends_on:
-      - database
+      database:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - saptara-network
 
@@ -78,7 +93,9 @@ services:
       - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
       - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
     depends_on:
-      - database
+      database:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - saptara-network
 
@@ -95,6 +112,12 @@ services:
       - saptara_memory:/var/lib/postgresql/data
     networks:
       - saptara-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saptara_keeper -d saptara_knowledge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   # The Messenger - The Swift
   redis:

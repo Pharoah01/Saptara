@@ -53,7 +53,8 @@ format:
 
 # Docker Operations
 build:
-	docker-compose build
+	docker build -t saptara-base -f Dockerfile.base .
+	docker-compose build orchestrator scanner validator simulator
 
 up:
 	docker-compose up -d
@@ -120,6 +121,7 @@ self-test:
 	@echo "🔍 Running self-test security scan..."
 	curl -X POST "http://localhost:8000/orchestrate" \
 		-H "Content-Type: application/json" \
+		-H "X-API-Key: $${API_KEYS:-saptara-dev-key-change-me}" \
 		-d '{"config": {"target_url": "http://localhost:8000", "test_categories": ["api_enumeration", "security_headers"], "intensity": "light"}, "services": ["scanner"], "parallel": false}'
 
 # Monitoring

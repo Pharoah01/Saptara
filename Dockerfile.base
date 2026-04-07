@@ -1,0 +1,28 @@
+FROM python:3.11-slim AS saptara-base
+
+WORKDIR /app
+
+# Suppress debconf TTY warnings during apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System deps needed to compile asyncpg, cryptography, psycopg2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ curl libpq-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Single virtualenv — all services share this layer
+RUN python -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/venv" \
+    PYTHONPATH="/app" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install all Python deps once — cached unless requirements.txt changes
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Shared code used by every service
+COPY shared/ ./shared/

@@ -22,6 +22,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from shared.models import ScanConfig
 from shared.utils import get_logger
 from shared.auth import verify_api_key
+from sqlalchemy import select, update
 from shared.db import init_db, AsyncSessionLocal, ScanJobRow
 from shared import metrics as m
 
@@ -45,6 +46,35 @@ orchestration_cache: Dict[str, Dict[str, Any]] = {}
 @app.on_event("startup")
 async def startup():
     await init_db()
+    await _reload_cache_from_db()
+
+
+async def _reload_cache_from_db():
+    """Restore orchestration records from DB into memory on startup."""
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ScanJobRow).where(ScanJobRow.service_name == "orchestrator")
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                # Mark any jobs that were 'running' when we crashed as 'interrupted'
+                status = row.status if row.status != "running" else "interrupted"
+                orchestration_cache[row.scan_id] = {
+                    "orchestration_id": row.scan_id,
+                    "config": row.config or {},
+                    "services": (row.config or {}).get("services", []),
+                    "parallel": (row.config or {}).get("parallel", True),
+                    "status": status,
+                    "progress": row.progress or 0.0,
+                    "service_results": row.service_results or {},
+                    "started_at": row.started_at,
+                    "completed_at": row.completed_at,
+                    "error": row.error,
+                }
+            logger.info(f"Restored {len(rows)} orchestration records from DB")
+    except Exception as e:
+        logger.warning(f"Could not restore cache from DB: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +189,18 @@ async def get_orchestration_results(orchestration_id: str):
     return orchestration_cache[orchestration_id]
 
 
+@app.delete("/orchestration/{orchestration_id}", dependencies=[Depends(verify_api_key)])
+async def cancel_orchestration(orchestration_id: str):
+    if orchestration_id not in orchestration_cache:
+        raise HTTPException(status_code=404, detail="Orchestration not found")
+    rec = orchestration_cache[orchestration_id]
+    if rec["status"] == "running":
+        rec["status"] = "cancelled"
+        rec["completed_at"] = datetime.utcnow()
+        m.active_scans.labels(service="orchestrator").dec()
+    return {"message": f"Orchestration {orchestration_id} cancelled", "status": rec["status"]}
+
+
 @app.get("/services", dependencies=[Depends(verify_api_key)])
 async def list_services():
     service_status = {}
@@ -186,43 +228,60 @@ async def execute_orchestration(orchestration_id: str, request: OrchestrationReq
     api_key = os.getenv("API_KEYS", "saptara-dev-key-change-me").split(",")[0].strip()
     headers = {"X-API-Key": api_key}
 
+    # Persist job to DB immediately so it survives a restart
+    async with AsyncSessionLocal() as session:
+        job = ScanJobRow(
+            scan_id=orchestration_id,
+            service_name="orchestrator",
+            target_url=request.config.target_url,
+            status="running",
+            progress=0.0,
+            config={**request.config.dict(), "services": request.services, "parallel": request.parallel},
+        )
+        session.add(job)
+        await session.commit()
+
     try:
+        valid_services = [s for s in request.services if s in SERVICES]
+        total = len(valid_services)
+
         if request.parallel:
             tasks = [
-                _call_service(svc, request.config, headers)
-                for svc in request.services if svc in SERVICES
+                _call_service(svc, request.config, headers, rec, i, total)
+                for i, svc in enumerate(valid_services)
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for svc, result in zip(request.services, results):
+            for svc, result in zip(valid_services, results):
                 rec["service_results"][svc] = (
                     {"status": "failed", "error": str(result)}
                     if isinstance(result, Exception) else result
                 )
         else:
-            for svc in request.services:
-                if svc in SERVICES:
-                    try:
-                        rec["service_results"][svc] = await _call_service(svc, request.config, headers)
-                    except Exception as e:
-                        rec["service_results"][svc] = {"status": "failed", "error": str(e)}
-
-        # Persist summary
-        async with AsyncSessionLocal() as session:
-            job = ScanJobRow(
-                scan_id=orchestration_id,
-                service_name="orchestrator",
-                target_url=request.config.target_url,
-                status="completed",
-                progress=100.0,
-                config=request.config.dict(),
-                completed_at=datetime.utcnow(),
-            )
-            session.add(job)
-            await session.commit()
+            for i, svc in enumerate(valid_services):
+                try:
+                    rec["service_results"][svc] = await _call_service(
+                        svc, request.config, headers, rec, i, total
+                    )
+                except Exception as e:
+                    rec["service_results"][svc] = {"status": "failed", "error": str(e)}
 
         rec["status"] = "completed"
         rec["progress"] = 100.0
         rec["completed_at"] = datetime.utcnow()
+
+        # Persist completed state + service_results to DB
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(ScanJobRow)
+                .where(ScanJobRow.scan_id == orchestration_id)
+                .values(
+                    status="completed",
+                    progress=100.0,
+                    service_results=rec["service_results"],
+                    completed_at=rec["completed_at"],
+                )
+            )
+            await session.commit()
 
         duration = time.time() - start
         m.scan_duration_seconds.labels(service="orchestrator").observe(duration)
@@ -234,10 +293,18 @@ async def execute_orchestration(orchestration_id: str, request: OrchestrationReq
         rec["status"] = "failed"
         rec["error"] = str(e)
         rec["completed_at"] = datetime.utcnow()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(ScanJobRow)
+                .where(ScanJobRow.scan_id == orchestration_id)
+                .values(status="failed", error=str(e), completed_at=rec["completed_at"])
+            )
+            await session.commit()
         m.active_scans.labels(service="orchestrator").dec()
 
 
-async def _call_service(service_name: str, config: ScanConfig, headers: dict) -> dict:
+async def _call_service(service_name: str, config: ScanConfig, headers: dict,
+                        rec: dict = None, service_index: int = 0, total_services: int = 1) -> dict:
     """Start a job on a downstream service and poll until done."""
     url = SERVICES[service_name]
     endpoint_map = {"scanner": "/scan", "validator": "/validate", "simulator": "/simulate"}
@@ -245,8 +312,13 @@ async def _call_service(service_name: str, config: ScanConfig, headers: dict) ->
     id_key_map = {"scanner": "scan_id", "validator": "validation_id", "simulator": "simulation_id"}
     id_key = id_key_map[service_name]
 
-    async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
-        r = await client.post(f"{url}{endpoint}", json={"config": config.dict()})
+    # No timeout on the client — scans can take many minutes
+    async with httpx.AsyncClient(headers=headers, timeout=None) as client:
+        r = await client.post(
+            f"{url}{endpoint}",
+            json={"config": config.dict()},
+            timeout=30.0,  # only the initial POST needs a short timeout
+        )
         if r.status_code != 200:
             raise Exception(f"{service_name} failed to start: {r.text}")
 
@@ -254,18 +326,35 @@ async def _call_service(service_name: str, config: ScanConfig, headers: dict) ->
         resource = endpoint.lstrip("/")
 
         while True:
-            sr = await client.get(f"{url}/{resource}/{job_id}/status", timeout=10.0)
+            sr = await client.get(
+                f"{url}/{resource}/{job_id}/status",
+                timeout=10.0,
+            )
             if sr.status_code != 200:
                 raise Exception(f"Status check failed for {service_name}")
+
             data = sr.json()
+
+            # Propagate per-service progress into the orchestration record
+            if rec is not None:
+                svc_progress = data.get("progress", 0)
+                # Overall progress = average across all services, weighted by position
+                base = (service_index / total_services) * 100
+                contribution = (svc_progress / total_services)
+                rec["progress"] = round(base + contribution, 1)
+
             if data["status"] in ("completed", "failed", "cancelled"):
-                rr = await client.get(f"{url}/{resource}/{job_id}/results", timeout=10.0)
+                rr = await client.get(
+                    f"{url}/{resource}/{job_id}/results",
+                    timeout=10.0,
+                )
                 return {
                     "status": data["status"],
                     "service_id": job_id,
                     "results": rr.json() if rr.status_code == 200 else None,
                 }
-            await asyncio.sleep(2)
+
+            await asyncio.sleep(3)
 
 
 if __name__ == "__main__":

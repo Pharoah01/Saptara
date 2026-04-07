@@ -2,342 +2,379 @@
 """
 Project SAPTARA CLI Client
 Seven relics. Seven roles. One system.
-
-Interactive command-line interface for the SAPTARA security testing framework
 """
 
+import os
 import click
 import httpx
 import json
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.panel import Panel
 from rich.json import JSON
+from dotenv import load_dotenv
+
+load_dotenv()
 
 console = Console()
 
-DEFAULT_ORCHESTRATOR_URL = "http://localhost:8000"
-DEFAULT_SCANNER_URL = "http://localhost:8001"
-DEFAULT_VALIDATOR_URL = "http://localhost:8002"
-DEFAULT_SIMULATOR_URL = "http://localhost:8003"
+DEFAULT_ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://localhost:8000")
+DEFAULT_API_KEY = os.getenv("API_KEYS", "").split(",")[0].strip()
+
+
+def auth_headers(ctx) -> dict:
+    """Return the X-API-Key header dict from context."""
+    key = ctx.obj.get("api_key", "")
+    if not key:
+        console.print("[red]❌ No API key set. Use --api-key or set API_KEYS in .env[/red]")
+        raise SystemExit(1)
+    return {"X-API-Key": key}
 
 
 @click.group()
-@click.option('--orchestrator-url', default=DEFAULT_ORCHESTRATOR_URL, help='The Orchestrator (Conductor) service URL')
-@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
+@click.option("--orchestrator-url", default=DEFAULT_ORCHESTRATOR_URL,
+              help="Orchestrator service URL (default: $ORCHESTRATOR_URL or http://localhost:8000)")
+@click.option("--api-key", "-k", default=DEFAULT_API_KEY, envvar="API_KEYS",
+              help="API key for authentication (default: first key in $API_KEYS)")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.pass_context
-def cli(ctx, orchestrator_url, verbose):
-    """🛡️ Project SAPTARA CLI - Seven relics. Seven roles. One system."""
+def cli(ctx, orchestrator_url, api_key, verbose):
+    """🛡️ Project SAPTARA CLI — Seven relics. Seven roles. One system."""
     ctx.ensure_object(dict)
-    ctx.obj['orchestrator_url'] = orchestrator_url
-    ctx.obj['verbose'] = verbose
+    ctx.obj["orchestrator_url"] = orchestrator_url
+    ctx.obj["api_key"] = api_key
+    ctx.obj["verbose"] = verbose
 
+
+# ---------------------------------------------------------------------------
+# health
+# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.pass_context
 def health(ctx):
     """Check health of all seven relics"""
-    orchestrator_url = ctx.obj['orchestrator_url']
-    
+    url = ctx.obj["orchestrator_url"]
     with console.status("[bold green]Checking the seven relics..."):
         try:
-            response = httpx.get(f"{orchestrator_url}/health", timeout=10.0)
+            response = httpx.get(f"{url}/health", timeout=10.0)
             if response.status_code == 200:
-                health_data = response.json()
-                
-                table = Table(title="🛡️ SAPTARA - The Seven Relics Status")
+                data = response.json()
+                table = Table(title="🛡️ SAPTARA — The Seven Relics Status")
                 table.add_column("Relic", style="cyan")
                 table.add_column("Role", style="yellow")
                 table.add_column("Status", style="bold")
                 table.add_column("Response Time", style="magenta")
-                
-                table.add_row("The Orchestrator", "The Conductor", "✅ Healthy", f"{response.elapsed.total_seconds():.2f}s")
-                
+
+                table.add_row("The Orchestrator", "The Conductor", "✅ Healthy",
+                              f"{response.elapsed.total_seconds():.2f}s")
+
                 relic_roles = {
-                    'scanner': ('The Scanner', 'The Seeker'),
-                    'validator': ('The Validator', 'The Guardian'),
-                    'simulator': ('The Simulator', 'The Challenger'),
-                    'database': ('The Keeper', 'The Memory'),
-                    'redis': ('The Messenger', 'The Swift'),
-                    'prometheus': ('The Observer', 'The Watcher')
+                    "scanner":    ("The Scanner",   "The Seeker"),
+                    "validator":  ("The Validator",  "The Guardian"),
+                    "simulator":  ("The Simulator",  "The Challenger"),
+                    "database":   ("The Keeper",     "The Memory"),
+                    "redis":      ("The Messenger",  "The Swift"),
+                    "prometheus": ("The Observer",   "The Watcher"),
                 }
-                
-                for service_name, service_data in health_data.get('services', {}).items():
-                    status = service_data.get('status', 'unknown')
-                    response_time = service_data.get('response_time', 0)
-                    
-                    relic_name, role = relic_roles.get(service_name, (service_name.title(), 'Unknown Role'))
-                    
-                    if status == 'healthy':
-                        status_display = "✅ Healthy"
-                    elif status == 'unhealthy':
-                        status_display = "❌ Unhealthy"
-                    else:
-                        status_display = "🔴 Unreachable"
-                    
-                    table.add_row(relic_name, role, status_display, f"{response_time:.2f}s")
-                
+                for svc, svc_data in data.get("services", {}).items():
+                    st = svc_data.get("status", "unknown")
+                    rt = svc_data.get("response_time", 0)
+                    name, role = relic_roles.get(svc, (svc.title(), "Unknown"))
+                    icon = "✅" if st == "healthy" else ("❌" if st == "unhealthy" else "🔴")
+                    table.add_row(name, role, f"{icon} {st.title()}", f"{rt:.2f}s")
+
                 console.print(table)
                 console.print("\n[italic]In unity, the seven relics find their strength.[/italic]")
             else:
-                console.print(f"[red]❌ Failed to get health status: {response.status_code}[/red]")
-                
+                console.print(f"[red]❌ Health check failed: {response.status_code}[/red]")
         except Exception as e:
-            console.print(f"[red]❌ Error checking health: {e}[/red]")
+            console.print(f"[red]❌ Error: {e}[/red]")
 
+
+# ---------------------------------------------------------------------------
+# scan
+# ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option('--target', '-t', required=True, help='Target URL to scan')
-@click.option('--categories', '-c', multiple=True, help='Test categories to run')
-@click.option('--intensity', '-i', type=click.Choice(['light', 'medium', 'heavy']), default='medium', help='Test intensity')
-@click.option('--services', '-s', multiple=True, default=['scanner'], help='Services to use')
-@click.option('--parallel', is_flag=True, default=True, help='Run services in parallel')
-@click.option('--wait', '-w', is_flag=True, help='Wait for completion and show results')
+@click.option("--target", "-t", required=True, help="Target URL to scan")
+@click.option("--categories", "-c", multiple=True,
+              help="Test categories (repeatable). Default: sql_injection xss path_traversal security_headers")
+@click.option("--intensity", "-i",
+              type=click.Choice(["light", "medium", "heavy"]), default="medium",
+              help="Test intensity level")
+@click.option("--services", "-s", multiple=True, default=["scanner"],
+              help="Services to invoke: scanner, validator, simulator (repeatable)")
+@click.option("--parallel/--sequential", default=True,
+              help="Run services in parallel (default) or sequentially")
+@click.option("--wait", "-w", is_flag=True,
+              help="Wait for completion and print results")
 @click.pass_context
 def scan(ctx, target, categories, intensity, services, parallel, wait):
-    """Start a security scan"""
-    orchestrator_url = ctx.obj['orchestrator_url']
-    
+    """Start a security scan against TARGET"""
+    url = ctx.obj["orchestrator_url"]
+    headers = auth_headers(ctx)
+
     if not categories:
-        categories = ['sql_injection', 'xss', 'path_traversal', 'security_headers']
-    
-    request_data = {
+        categories = ["sql_injection", "xss", "path_traversal", "security_headers"]
+
+    # Ensure target has a scheme
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+
+    payload = {
         "config": {
             "target_url": target,
             "test_categories": list(categories),
             "intensity": intensity,
-            "verbose": ctx.obj['verbose']
+            "verbose": ctx.obj["verbose"],
         },
         "services": list(services),
-        "parallel": parallel
+        "parallel": parallel,
     }
-    
-    console.print(Panel(f"🛡️ SAPTARA initiating protection for [bold cyan]{target}[/bold cyan]"))
-    console.print(f"Categories: {', '.join(categories)}")
-    console.print(f"Intensity: {intensity}")
-    console.print(f"Relics: {', '.join(services)}")
-    console.print("[italic]Seven relics working in unity...[/italic]")
-    
+
+    console.print(Panel(
+        f"🛡️ SAPTARA initiating scan for [bold cyan]{target}[/bold cyan]"
+    ))
+    console.print(f"Categories : {', '.join(categories)}")
+    console.print(f"Intensity  : {intensity}")
+    console.print(f"Services   : {', '.join(services)}")
+    console.print(f"Mode       : {'parallel' if parallel else 'sequential'}")
+
     try:
         with console.status("[bold green]The relics are awakening..."):
-            response = httpx.post(
-                f"{orchestrator_url}/orchestrate",
-                json=request_data,
-                timeout=30.0
-            )
-        
-        if response.status_code == 200:
-            result = response.json()
-            orchestration_id = result['orchestration_id']
-            
-            console.print(f"[green]✅ SAPTARA protection initiated successfully![/green]")
-            console.print(f"Orchestration ID: [bold]{orchestration_id}[/bold]")
-            
-            if wait:
-                wait_for_completion(orchestrator_url, orchestration_id)
-            else:
-                console.print(f"\n💡 To check status: [bold]saptara status {orchestration_id}[/bold]")
-                console.print(f"💡 To get results: [bold]saptara results {orchestration_id}[/bold]")
-        else:
-            console.print(f"[red]❌ Failed to start scan: {response.status_code}[/red]")
-            console.print(response.text)
-            
-    except Exception as e:
-        console.print(f"[red]❌ Error starting scan: {e}[/red]")
+            resp = httpx.post(f"{url}/orchestrate", json=payload,
+                              headers=headers, timeout=30.0)
 
+        if resp.status_code == 200:
+            result = resp.json()
+            oid = result["orchestration_id"]
+            console.print(f"\n[green]✅ Scan started[/green]")
+            console.print(f"Orchestration ID: [bold]{oid}[/bold]")
+
+            if wait:
+                _wait_for_completion(url, oid, headers)
+            else:
+                console.print(f"\n  python cli.py status {oid}")
+                console.print(f"  python cli.py results {oid}")
+        else:
+            console.print(f"[red]❌ Failed ({resp.status_code}): {resp.text}[/red]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {e}[/red]")
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
 
 @cli.command()
-@click.argument('orchestration_id')
+@click.argument("orchestration_id")
 @click.pass_context
 def status(ctx, orchestration_id):
     """Check status of a scan"""
-    orchestrator_url = ctx.obj['orchestrator_url']
-    
+    url = ctx.obj["orchestrator_url"]
+    headers = auth_headers(ctx)
     try:
-        response = httpx.get(f"{orchestrator_url}/orchestration/{orchestration_id}/status", timeout=10.0)
-        
-        if response.status_code == 200:
-            status_data = response.json()
-            
-            table = Table(title=f"📊 Scan Status: {orchestration_id}")
-            table.add_column("Property", style="cyan")
+        resp = httpx.get(f"{url}/orchestration/{orchestration_id}/status",
+                         headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            d = resp.json()
+            table = Table(title=f"📊 Scan Status")
+            table.add_column("Field", style="cyan")
             table.add_column("Value", style="bold")
-            
-            table.add_row("Status", status_data.get('status', 'unknown'))
-            table.add_row("Progress", f"{status_data.get('progress', 0):.1f}%")
-            table.add_row("Started", status_data.get('started_at', 'unknown'))
-            
-            if status_data.get('completed_at'):
-                table.add_row("Completed", status_data['completed_at'])
-            
+            table.add_row("Orchestration ID", orchestration_id)
+            table.add_row("Status", d.get("status", "unknown"))
+            table.add_row("Progress", f"{d.get('progress', 0):.1f}%")
+            table.add_row("Started", str(d.get("started_at", "")))
+            if d.get("completed_at"):
+                table.add_row("Completed", str(d["completed_at"]))
             console.print(table)
-            
-            service_results = status_data.get('service_results', {})
-            if service_results:
-                console.print("\n🔧 Service Results:")
-                for service_name, service_data in service_results.items():
-                    service_status = service_data.get('status', 'unknown')
-                    console.print(f"  {service_name}: {service_status}")
-        else:
-            console.print(f"[red]❌ Failed to get status: {response.status_code}[/red]")
-            
-    except Exception as e:
-        console.print(f"[red]❌ Error getting status: {e}[/red]")
 
+            for svc, svc_data in d.get("service_results", {}).items():
+                console.print(f"  {svc}: {svc_data.get('status', 'unknown')}")
+        else:
+            console.print(f"[red]❌ {resp.status_code}: {resp.text}[/red]")
+    except Exception as e:
+        console.print(f"[red]❌ Error: {e}[/red]")
+
+
+# ---------------------------------------------------------------------------
+# results
+# ---------------------------------------------------------------------------
 
 @cli.command()
-@click.argument('orchestration_id')
-@click.option('--format', '-f', type=click.Choice(['table', 'json']), default='table', help='Output format')
-@click.option('--save', '-s', help='Save results to file')
+@click.argument("orchestration_id")
+@click.option("--format", "-f", type=click.Choice(["table", "json"]),
+              default="table", help="Output format")
+@click.option("--save", "-s", help="Save results to a JSON file")
 @click.pass_context
 def results(ctx, orchestration_id, format, save):
-    """Get results of a scan"""
-    orchestrator_url = ctx.obj['orchestrator_url']
-    
+    """Get results of a completed scan"""
+    url = ctx.obj["orchestrator_url"]
+    headers = auth_headers(ctx)
     try:
-        response = httpx.get(f"{orchestrator_url}/orchestration/{orchestration_id}/results", timeout=10.0)
-        
-        if response.status_code == 200:
-            results_data = response.json()
-            
-            if format == 'json':
-                console.print(JSON(json.dumps(results_data, indent=2)))
+        resp = httpx.get(f"{url}/orchestration/{orchestration_id}/results",
+                         headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if format == "json":
+                console.print(JSON(json.dumps(data, indent=2, default=str)))
             else:
-                display_results_table(results_data)
-            
+                _display_results_table(data)
             if save:
-                with open(save, 'w') as f:
-                    json.dump(results_data, f, indent=2)
-                console.print(f"[green]💾 Results saved to {save}[/green]")
-                
+                with open(save, "w") as f:
+                    json.dump(data, f, indent=2, default=str)
+                console.print(f"[green]💾 Saved to {save}[/green]")
         else:
-            console.print(f"[red]❌ Failed to get results: {response.status_code}[/red]")
-            
+            console.print(f"[red]❌ {resp.status_code}: {resp.text}[/red]")
     except Exception as e:
-        console.print(f"[red]❌ Error getting results: {e}[/red]")
+        console.print(f"[red]❌ Error: {e}[/red]")
 
+
+# ---------------------------------------------------------------------------
+# cancel
+# ---------------------------------------------------------------------------
 
 @cli.command()
+@click.argument("orchestration_id")
+@click.pass_context
+def cancel(ctx, orchestration_id):
+    """Cancel a running scan"""
+    url = ctx.obj["orchestrator_url"]
+    headers = auth_headers(ctx)
+    try:
+        resp = httpx.delete(
+            f"{url}/orchestration/{orchestration_id}",
+            headers=headers, timeout=10.0
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            console.print(f"[yellow]🛑 {data.get('message')}[/yellow]")
+        else:
+            console.print(f"[red]❌ {resp.status_code}: {resp.text}[/red]")
+    except Exception as e:
+        console.print(f"[red]❌ Error: {e}[/red]")
+
+
+# ---------------------------------------------------------------------------
+# list-scans
+# ---------------------------------------------------------------------------
+
+@cli.command(name="list-scans")
 @click.pass_context
 def list_scans(ctx):
     """List all scans"""
-    orchestrator_url = ctx.obj['orchestrator_url']
-    
+    url = ctx.obj["orchestrator_url"]
+    headers = auth_headers(ctx)
     try:
-        response = httpx.get(f"{orchestrator_url}/orchestration", timeout=10.0)
-        
-        if response.status_code == 200:
-            scans_data = response.json()
-            scans = scans_data.get('orchestrations', [])
-            
+        resp = httpx.get(f"{url}/orchestration", headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            scans = resp.json().get("orchestrations", [])
             if scans:
                 table = Table(title="📋 All Scans")
                 table.add_column("ID", style="cyan")
                 table.add_column("Target", style="bold")
                 table.add_column("Status", style="magenta")
                 table.add_column("Started", style="green")
-                
-                for scan in scans:
+                for s in scans:
                     table.add_row(
-                        scan.get('orchestration_id', '')[:8] + '...',
-                        scan.get('config', {}).get('target_url', 'unknown'),
-                        scan.get('status', 'unknown'),
-                        scan.get('started_at', 'unknown')
+                        s.get("orchestration_id", "")[:12] + "...",
+                        s.get("config", {}).get("target_url", ""),
+                        s.get("status", ""),
+                        str(s.get("started_at", "")),
                     )
-                
                 console.print(table)
             else:
                 console.print("[yellow]No scans found[/yellow]")
         else:
-            console.print(f"[red]❌ Failed to list scans: {response.status_code}[/red]")
-            
+            console.print(f"[red]❌ {resp.status_code}: {resp.text}[/red]")
     except Exception as e:
-        console.print(f"[red]❌ Error listing scans: {e}[/red]")
+        console.print(f"[red]❌ Error: {e}[/red]")
 
 
-def wait_for_completion(orchestrator_url: str, orchestration_id: str):
-    """Wait for scan completion and show progress"""
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("Running security scan...", total=100)
-        
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _wait_for_completion(url: str, oid: str, headers: dict):
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"),
+                  console=console) as progress:
+        task = progress.add_task("Scanning...", total=100)
         while True:
             try:
-                response = httpx.get(f"{orchestrator_url}/orchestration/{orchestration_id}/status", timeout=10.0)
-                
-                if response.status_code == 200:
-                    status_data = response.json()
-                    status = status_data.get('status', 'unknown')
-                    progress_value = status_data.get('progress', 0)
-                    
-                    progress.update(task, completed=progress_value)
-                    
-                    if status in ['completed', 'failed', 'cancelled']:
+                resp = httpx.get(f"{url}/orchestration/{oid}/status",
+                                 headers=headers, timeout=10.0)
+                if resp.status_code == 200:
+                    d = resp.json()
+                    progress.update(task, completed=d.get("progress", 0),
+                                    description=f"Scanning... {d.get('status', '')}")
+                    if d.get("status") in ("completed", "failed", "cancelled"):
                         break
-                        
-                time.sleep(2)
-                
-            except Exception as e:
-                console.print(f"[red]❌ Error checking status: {e}[/red]")
+            except Exception:
                 break
-    
-    console.print(f"\n[green]✅ Scan completed![/green]")
-    console.print(f"Getting results for {orchestration_id}...")
-    
+            time.sleep(2)
+
+    console.print("\n[green]✅ Scan complete[/green]")
     try:
-        response = httpx.get(f"{orchestrator_url}/orchestration/{orchestration_id}/results", timeout=10.0)
-        if response.status_code == 200:
-            results_data = response.json()
-            display_results_table(results_data)
+        resp = httpx.get(f"{url}/orchestration/{oid}/results",
+                         headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            _display_results_table(resp.json())
     except Exception as e:
-        console.print(f"[red]❌ Error getting final results: {e}[/red]")
+        console.print(f"[red]❌ Could not fetch results: {e}[/red]")
 
 
-def display_results_table(results_data: Dict[str, Any]):
-    """Display results in a formatted table"""
-    service_results = results_data.get('service_results', {})
-    
-    for service_name, service_data in service_results.items():
-        console.print(f"\n🔧 {service_name.title()} Results:")
-        
-        results = service_data.get('results', {}).get('results', [])
-        if results:
-            table = Table()
-            table.add_column("Category", style="cyan")
-            table.add_column("Test", style="bold")
-            table.add_column("Status", style="magenta")
-            table.add_column("Details", style="green")
-            
-            for result in results[:10]:  # Show first 10 results
-                status = result.get('status', 'unknown')
-                status_display = {
-                    'passed': '✅ Passed',
-                    'blocked': '🛡️ Blocked',
-                    'vulnerable': '🚨 Vulnerable',
-                    'failed': '❌ Failed',
-                    'error': '⚠️ Error'
-                }.get(status, status)
-                
-                table.add_row(
-                    result.get('category', ''),
-                    result.get('test_name', ''),
-                    status_display,
-                    result.get('details', '')[:50] + '...' if result.get('details') else ''
-                )
-            
-            console.print(table)
-            
-            if len(results) > 10:
-                console.print(f"... and {len(results) - 10} more results")
-        else:
-            console.print("[yellow]No results found[/yellow]")
+def _display_results_table(data: Dict[str, Any]):
+    for svc, svc_data in data.get("service_results", {}).items():
+        console.print(f"\n[bold cyan]── {svc.title()} ──[/bold cyan]")
+        results = svc_data.get("results", {}).get("results", [])
+        if not results:
+            console.print("[yellow]  No results[/yellow]")
+            continue
+
+        table = Table(show_lines=True)
+        table.add_column("Category", style="cyan", no_wrap=True)
+        table.add_column("Test", style="white")
+        table.add_column("Status", style="bold", no_wrap=True)
+        table.add_column("Severity", style="magenta", no_wrap=True)
+        table.add_column("Details", style="dim")
+
+        status_icons = {
+            "passed":     "✅ Passed",
+            "blocked":    "🛡️  Blocked",
+            "vulnerable": "🚨 Vulnerable",
+            "failed":     "❌ Failed",
+            "error":      "⚠️  Error",
+            "skipped":    "⏭️  Skipped",
+        }
+        severity_colors = {
+            "critical": "[red]CRITICAL[/red]",
+            "high":     "[orange3]HIGH[/orange3]",
+            "medium":   "[yellow]MEDIUM[/yellow]",
+            "low":      "[green]LOW[/green]",
+            "info":     "[blue]INFO[/blue]",
+        }
+
+        for r in results:
+            st = r.get("status", "")
+            sev = r.get("vulnerability_level") or ""
+            details = r.get("details", "") or ""
+            table.add_row(
+                r.get("category", ""),
+                r.get("test_name", ""),
+                status_icons.get(st, st),
+                severity_colors.get(sev, sev),
+                details[:80] + ("…" if len(details) > 80 else ""),
+            )
+
+        console.print(table)
+        vuln_count = sum(1 for r in results if r.get("status") == "vulnerable")
+        console.print(f"  {len(results)} tests — [red]{vuln_count} vulnerable[/red]")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     cli()

@@ -57,6 +57,7 @@ class ScanJobRow(Base):
     results_count = Column(Integer, default=0)
     vulnerabilities_found = Column(Integer, default=0)
     config = Column(JSON, nullable=True)
+    service_results = Column(JSON, nullable=True)   # orchestrator: full service result map
     error = Column(String, nullable=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
