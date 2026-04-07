@@ -15,10 +15,16 @@ services:
       - SERVICE_NAME=orchestrator
       - RELIC_ROLE=conductor
       - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
+      - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
+      - SCANNER_URL=http://scanner:8001
+      - VALIDATOR_URL=http://validator:8002
+      - SIMULATOR_URL=http://simulator:8003
     depends_on:
       - scanner
       - validator
       - simulator
+      - database
     networks:
       - saptara-network
 
@@ -33,6 +39,10 @@ services:
       - SERVICE_NAME=scanner
       - RELIC_ROLE=seeker
       - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
+      - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
+    depends_on:
+      - database
     networks:
       - saptara-network
 
@@ -47,6 +57,10 @@ services:
       - SERVICE_NAME=validator
       - RELIC_ROLE=guardian
       - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
+      - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
+    depends_on:
+      - database
     networks:
       - saptara-network
 
@@ -61,6 +75,10 @@ services:
       - SERVICE_NAME=simulator
       - RELIC_ROLE=challenger
       - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
+      - API_KEYS=${API_KEYS:-saptara-dev-key-change-me}
+    depends_on:
+      - database
     networks:
       - saptara-network
 

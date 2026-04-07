@@ -1,20 +1,26 @@
 """
 Security Attack Simulator Microservice
-FastAPI-based microservice for simulating real-world attacks
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+import os
+import time
 import uuid
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from pydantic import BaseModel
 
 import sys
-import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from shared.models import ScanConfig, TestResult
+from shared.models import ScanConfig
 from shared.utils import get_logger
+from shared.auth import verify_api_key
+from shared.db import init_db, AsyncSessionLocal, ScanResultRow, ScanJobRow
+from shared import metrics as m
 from .simulator_engine import SimulatorEngine
 
 logger = get_logger(__name__)
@@ -22,22 +28,30 @@ logger = get_logger(__name__)
 app = FastAPI(
     title="Security Attack Simulator",
     description="Simulates real-world security attacks and penetration testing",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 simulator_engine = SimulatorEngine()
-simulation_results: Dict[str, Dict[str, Any]] = {}
+simulation_cache: Dict[str, Dict[str, Any]] = {}
+
+
+@app.on_event("startup")
+async def startup():
+    await init_db()
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return JSONResponse(content=generate_latest().decode(), media_type=CONTENT_TYPE_LATEST)
 
 
 class SimulationRequest(BaseModel):
-    """Simulation request model"""
     config: ScanConfig
     attack_scenarios: List[str] = ["basic_attacks", "advanced_attacks"]
     callback_url: Optional[str] = None
 
 
 class SimulationResponse(BaseModel):
-    """Simulation response model"""
     simulation_id: str
     status: str
     message: str
@@ -46,122 +60,124 @@ class SimulationResponse(BaseModel):
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
     return {"service": "Security Attack Simulator", "status": "healthy", "version": "1.0.0"}
 
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "service": "simulator",
-        "version": "1.0.0"
-    }
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat(),
+            "service": "simulator", "version": "1.0.0"}
 
 
-@app.post("/simulate", response_model=SimulationResponse)
+@app.post("/simulate", response_model=SimulationResponse, dependencies=[Depends(verify_api_key)])
 async def start_simulation(request: SimulationRequest, background_tasks: BackgroundTasks):
-    """Start attack simulation"""
-    try:
-        simulation_id = str(uuid.uuid4())
-        
-        simulation_record = {
-            "simulation_id": simulation_id,
-            "config": request.config.dict(),
-            "attack_scenarios": request.attack_scenarios,
-            "status": "running",
-            "progress": 0.0,
-            "results": [],
-            "attacks_simulated": 0,
-            "started_at": datetime.utcnow(),
-            "completed_at": None,
-            "callback_url": request.callback_url
-        }
-        
-        simulation_results[simulation_id] = simulation_record
-        
-        background_tasks.add_task(execute_simulation, simulation_id, request)
-        
-        logger.info(f"Started simulation {simulation_id} for target {request.config.target_url}")
-        
-        return SimulationResponse(
-            simulation_id=simulation_id,
-            status="running",
-            message="Simulation started successfully",
-            started_at=simulation_record["started_at"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to start simulation: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start simulation: {str(e)}")
+    simulation_id = str(uuid.uuid4())
+    now = datetime.utcnow()
 
-
-@app.get("/simulate/{simulation_id}/status")
-async def get_simulation_status(simulation_id: str):
-    """Get simulation status"""
-    if simulation_id not in simulation_results:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    
-    return simulation_results[simulation_id]
-
-
-@app.get("/simulate/{simulation_id}/results")
-async def get_simulation_results(simulation_id: str):
-    """Get simulation results"""
-    if simulation_id not in simulation_results:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    
-    return simulation_results[simulation_id]
-
-
-@app.get("/scenarios")
-async def list_attack_scenarios():
-    """List available attack scenarios"""
-    return {
-        "scenarios": [
-            {
-                "id": "basic_attacks",
-                "name": "Basic Attack Simulation",
-                "description": "Common web application attacks"
-            },
-            {
-                "id": "advanced_attacks", 
-                "name": "Advanced Attack Simulation",
-                "description": "Sophisticated attack patterns"
-            },
-            {
-                "id": "penetration_testing",
-                "name": "Penetration Testing",
-                "description": "Comprehensive penetration testing scenarios"
-            }
-        ]
+    simulation_cache[simulation_id] = {
+        "simulation_id": simulation_id,
+        "config": request.config.dict(),
+        "attack_scenarios": request.attack_scenarios,
+        "status": "running",
+        "progress": 0.0,
+        "results": [],
+        "attacks_simulated": 0,
+        "started_at": now,
+        "completed_at": None,
     }
+
+    m.scans_total.labels(service="simulator").inc()
+    m.active_scans.labels(service="simulator").inc()
+    background_tasks.add_task(execute_simulation, simulation_id, request)
+    logger.info(f"Started simulation {simulation_id}")
+
+    return SimulationResponse(simulation_id=simulation_id, status="running",
+                               message="Simulation started successfully", started_at=now)
+
+
+@app.get("/simulate/{simulation_id}/status", dependencies=[Depends(verify_api_key)])
+async def get_simulation_status(simulation_id: str):
+    if simulation_id not in simulation_cache:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return simulation_cache[simulation_id]
+
+
+@app.get("/simulate/{simulation_id}/results", dependencies=[Depends(verify_api_key)])
+async def get_simulation_results(simulation_id: str):
+    if simulation_id not in simulation_cache:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return simulation_cache[simulation_id]
+
+
+@app.get("/scenarios", dependencies=[Depends(verify_api_key)])
+async def list_attack_scenarios():
+    return {"scenarios": [
+        {"id": "basic_attacks", "name": "Basic Attack Simulation", "description": "Common web application attacks"},
+        {"id": "advanced_attacks", "name": "Advanced Attack Simulation", "description": "Sophisticated attack patterns"},
+        {"id": "penetration_testing", "name": "Penetration Testing", "description": "Comprehensive penetration testing"},
+    ]}
 
 
 async def execute_simulation(simulation_id: str, request: SimulationRequest):
-    """Execute attack simulation in background"""
+    rec = simulation_cache[simulation_id]
+    start = time.time()
     try:
-        logger.info(f"Executing simulation {simulation_id}")
-        
-        simulation_record = simulation_results[simulation_id]
-        results = await simulator_engine.execute_simulation(request.config, request.attack_scenarios, simulation_id)
-        
-        simulation_record["results"] = [result.dict() for result in results]
-        simulation_record["attacks_simulated"] = len(results)
-        simulation_record["status"] = "completed"
-        simulation_record["progress"] = 100.0
-        simulation_record["completed_at"] = datetime.utcnow()
-        
-        logger.info(f"Completed simulation {simulation_id} with {len(results)} results")
-        
+        results = await simulator_engine.execute_simulation(
+            request.config, request.attack_scenarios, simulation_id
+        )
+
+        async with AsyncSessionLocal() as session:
+            job = ScanJobRow(
+                scan_id=simulation_id,
+                service_name="simulator",
+                target_url=request.config.target_url,
+                status="completed",
+                progress=100.0,
+                results_count=len(results),
+                vulnerabilities_found=sum(1 for r in results if r.is_security_issue()),
+                config=request.config.dict(),
+                completed_at=datetime.utcnow(),
+            )
+            session.add(job)
+            for result in results:
+                session.add(ScanResultRow(
+                    id=result.id,
+                    scan_id=simulation_id,
+                    service_name=result.service_name,
+                    category=result.category,
+                    test_name=result.test_name,
+                    status=result.status,
+                    vulnerability_level=result.vulnerability_level,
+                    target_url=result.target_url,
+                    method=result.method,
+                    payload=result.payload,
+                    response_code=result.response_code,
+                    response_time=result.response_time,
+                    details=result.details,
+                ))
+                m.tests_total.labels(service="simulator", category=result.category,
+                                     status=result.status.value).inc()
+                if result.is_security_issue() and result.vulnerability_level:
+                    m.vulnerabilities_found.labels(service="simulator",
+                                                   severity=result.vulnerability_level.value).inc()
+            await session.commit()
+
+        rec["results"] = [r.dict() for r in results]
+        rec["attacks_simulated"] = len(results)
+        rec["status"] = "completed"
+        rec["progress"] = 100.0
+        rec["completed_at"] = datetime.utcnow()
+
+        m.scan_duration_seconds.labels(service="simulator").observe(time.time() - start)
+        m.active_scans.labels(service="simulator").dec()
+        logger.info(f"Simulation {simulation_id} completed with {len(results)} results")
+
     except Exception as e:
         logger.error(f"Simulation {simulation_id} failed: {e}")
-        simulation_record = simulation_results.get(simulation_id, {})
-        simulation_record["status"] = "failed"
-        simulation_record["error"] = str(e)
-        simulation_record["completed_at"] = datetime.utcnow()
+        rec["status"] = "failed"
+        rec["error"] = str(e)
+        rec["completed_at"] = datetime.utcnow()
+        m.active_scans.labels(service="simulator").dec()
 
 
 if __name__ == "__main__":

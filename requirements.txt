@@ -29,6 +29,8 @@ pydantic>=2.0.0
 # Database (for storing test results)
 sqlalchemy>=2.0.0
 alembic>=1.10.0
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0
 
 # Testing and Validation
 pytest>=7.0.0
