@@ -148,3 +148,60 @@ class PayloadDatabase:
             "python-requests", "curl/7.68.0", "Wget/1.20.3",
             "libwww-perl", "Go-http-client", "Java/1.8"
         ]
+
+    def get_injectable_endpoints(self):
+        """
+        Returns list of (endpoint, field_name, [methods]) tuples for injection testing.
+        Covers auth, search, profile, and common CRUD endpoints.
+        """
+        return [
+            ("/api/auth/login/", "username", ["GET", "POST"]),
+            ("/api/auth/login/", "password", ["POST"]),
+            ("/api/auth/register/", "username", ["POST"]),
+            ("/api/auth/register/", "email", ["POST"]),
+            ("/api/users/", "id", ["GET"]),
+            ("/api/users/", "username", ["GET"]),
+            ("/api/search/", "q", ["GET"]),
+            ("/api/search/", "query", ["GET"]),
+            ("/api/products/", "id", ["GET"]),
+            ("/api/products/", "category", ["GET"]),
+            ("/api/orders/", "id", ["GET"]),
+            ("/api/comments/", "post_id", ["GET"]),
+            ("/api/files/", "filename", ["GET"]),
+            ("/api/download/", "file", ["GET"]),
+            ("/login", "username", ["GET", "POST"]),
+            ("/login", "password", ["POST"]),
+            ("/search", "q", ["GET"]),
+        ]
+
+    def get_sensitive_endpoints(self):
+        """
+        Returns list of endpoint paths that should not be publicly accessible.
+        """
+        return [
+            # Environment & config
+            "/.env", "/.env.local", "/.env.production", "/.env.backup",
+            "/config.json", "/config.yml", "/config.yaml", "/app.config",
+            "/web.config", "/settings.py", "/local_settings.py",
+            # Source control
+            "/.git/config", "/.git/HEAD", "/.git/COMMIT_EDITMSG",
+            "/.svn/entries", "/.hg/hgrc",
+            # Backups
+            "/backup.sql", "/backup.tar.gz", "/backup.zip", "/db.sql",
+            "/dump.sql", "/database.sql", "/site.tar.gz",
+            # Admin & debug
+            "/admin/", "/admin/login/", "/api/admin/", "/api/debug/",
+            "/api/internal/", "/api/private/", "/api/v1/admin/",
+            "/phpinfo.php", "/info.php", "/test.php",
+            # Framework-specific
+            "/actuator/env", "/actuator/health", "/actuator/beans",
+            "/actuator/mappings", "/actuator/metrics",
+            "/_profiler/", "/_profiler/phpinfo",
+            "/telescope/requests", "/horizon/",
+            # API docs
+            "/docs", "/swagger", "/swagger-ui.html", "/api-docs",
+            "/openapi.json", "/openapi.yaml",
+            # Logs
+            "/logs/", "/log/app.log", "/storage/logs/laravel.log",
+            "/var/log/nginx/error.log",
+        ]

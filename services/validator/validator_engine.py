@@ -205,26 +205,6 @@ class ValidatorEngine:
         
         return results
     
-    # Placeholder methods for other validation tests
-    async def _validate_session_security(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
-        """Validate session security"""
-        return []
-    
-    async def _validate_csrf_protection(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
-        """Validate CSRF protection"""
-        return []
-    
-    async def _validate_input_validation(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
-        """Validate input validation"""
-        return []
-    
-    async def _validate_security_headers(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
-        """Validate security headers"""
-        return []
-    
-    async def _validate_robots_txt(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
-        """Validate robots.txt configuration"""
-        return []
     async def _validate_session_security(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
         """Validate session security"""
         results = []
