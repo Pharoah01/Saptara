@@ -8,19 +8,32 @@ from pydantic import BaseModel, Field, validator
 
 
 class TestCategory(str, Enum):
-    """Available test categories"""
+    """Available test categories — mapped to OWASP Top 10 2021"""
+    # A03 Injection
     SQL_INJECTION = "sql_injection"
-    PATH_TRAVERSAL = "path_traversal"
     XSS = "xss"
+    COMMAND_INJECTION = "command_injection"
+    XXE_INJECTION = "xxe_injection"
+    # A01 Broken Access Control
     AUTHENTICATION_BYPASS = "authentication_bypass"
-    RATE_LIMITING = "rate_limiting"
-    BOT_DETECTION = "bot_detection"
     API_ENUMERATION = "api_enumeration"
-    FILE_UPLOAD_SECURITY = "file_upload_security"
-    INFORMATION_DISCLOSURE = "information_disclosure"
-    CSRF_PROTECTION = "csrf_protection"
-    SECURITY_HEADERS = "security_headers"
+    IDOR = "idor"
+    # A02 Cryptographic Failures
     SSL_TLS_SECURITY = "ssl_tls_security"
+    INFORMATION_DISCLOSURE = "information_disclosure"
+    # A05 Security Misconfiguration
+    SECURITY_HEADERS = "security_headers"
+    CORS_MISCONFIGURATION = "cors_misconfiguration"
+    # A07 Auth & Session Failures
+    RATE_LIMITING = "rate_limiting"
+    CSRF_PROTECTION = "csrf_protection"
+    # A08 Software & Data Integrity
+    FILE_UPLOAD_SECURITY = "file_upload_security"
+    # A10 SSRF
+    SSRF = "ssrf"
+    # Other
+    PATH_TRAVERSAL = "path_traversal"
+    BOT_DETECTION = "bot_detection"
 
 
 class IntensityLevel(str, Enum):
