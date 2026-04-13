@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 from datetime import datetime
+from shared.utils.timezone import now_ist
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
@@ -92,14 +93,14 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat(),
+    return {"status": "healthy", "timestamp": now_ist().isoformat(),
             "service": "simulator", "version": "1.0.0"}
 
 
 @app.post("/simulate", response_model=SimulationResponse, dependencies=[Depends(verify_api_key)])
 async def start_simulation(request: SimulationRequest, background_tasks: BackgroundTasks):
     simulation_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = now_ist()
 
     simulation_cache[simulation_id] = {
         "simulation_id": simulation_id,
@@ -163,7 +164,7 @@ async def execute_simulation(simulation_id: str, request: SimulationRequest):
                 results_count=len(results),
                 vulnerabilities_found=sum(1 for r in results if r.is_security_issue()),
                 config=request.config.dict(),
-                completed_at=datetime.utcnow(),
+                completed_at=now_ist(),
             )
             session.add(job)
             for result in results:
@@ -193,7 +194,7 @@ async def execute_simulation(simulation_id: str, request: SimulationRequest):
         rec["attacks_simulated"] = len(results)
         rec["status"] = "completed"
         rec["progress"] = 100.0
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
 
         m.scan_duration_seconds.labels(service="simulator").observe(time.time() - start)
         m.active_scans.labels(service="simulator").dec()
@@ -203,7 +204,7 @@ async def execute_simulation(simulation_id: str, request: SimulationRequest):
         logger.error(f"Simulation {simulation_id} failed: {e}")
         rec["status"] = "failed"
         rec["error"] = str(e)
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
         m.active_scans.labels(service="simulator").dec()
 
 

@@ -10,6 +10,8 @@ import click
 import httpx
 import json
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, Any
 from rich.console import Console
 from rich.table import Table
@@ -238,7 +240,7 @@ def results(ctx, orchestration_id, format, save):
                 target = data.get("config", {}).get("target_url", "unknown")
                 domain = re.sub(r"https?://", "", target).rstrip("/").replace("/", "_")
                 domain = re.sub(r"[^\w\-.]", "_", domain)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y%m%d_%H%M%S")
                 save = os.path.join("results", f"{domain}_{timestamp}.json")
 
             with open(save, "w") as f:
@@ -338,7 +340,7 @@ def _wait_for_completion(url: str, oid: str, headers: dict):
             target = data.get("config", {}).get("target_url", "unknown")
             domain = re.sub(r"https?://", "", target).rstrip("/").replace("/", "_")
             domain = re.sub(r"[^\w\-.]", "_", domain)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y%m%d_%H%M%S")
             path = os.path.join("results", f"{domain}_{timestamp}.json")
             with open(path, "w") as f:
                 json.dump(data, f, indent=2, default=str)

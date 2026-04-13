@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 from datetime import datetime
+from shared.utils.timezone import now_ist
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
@@ -91,14 +92,14 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat(),
+    return {"status": "healthy", "timestamp": now_ist().isoformat(),
             "service": "validator", "version": "1.0.0"}
 
 
 @app.post("/validate", response_model=ValidationResponse, dependencies=[Depends(verify_api_key)])
 async def start_validation(request: ValidationRequest, background_tasks: BackgroundTasks):
     validation_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = now_ist()
 
     validation_cache[validation_id] = {
         "validation_id": validation_id,
@@ -150,7 +151,7 @@ async def execute_validation(validation_id: str, config: ScanConfig):
                 results_count=len(results),
                 vulnerabilities_found=sum(1 for r in results if r.status == TestStatus.FAILED),
                 config=config.dict(),
-                completed_at=datetime.utcnow(),
+                completed_at=now_ist(),
             )
             session.add(job)
             for result in results:
@@ -177,7 +178,7 @@ async def execute_validation(validation_id: str, config: ScanConfig):
         rec["features_validated"] = len(results)
         rec["status"] = "completed"
         rec["progress"] = 100.0
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
 
         m.scan_duration_seconds.labels(service="validator").observe(time.time() - start)
         m.active_scans.labels(service="validator").dec()
@@ -187,7 +188,7 @@ async def execute_validation(validation_id: str, config: ScanConfig):
         logger.error(f"Validation {validation_id} failed: {e}")
         rec["status"] = "failed"
         rec["error"] = str(e)
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
         m.active_scans.labels(service="validator").dec()
 
 

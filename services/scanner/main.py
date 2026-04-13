@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Any
 import uuid
 import time
 from datetime import datetime
+from shared.utils.timezone import now_ist
 
 import sys
 import os
@@ -109,7 +110,7 @@ async def root():
 async def health_check():
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_ist().isoformat(),
         "service": "scanner",
         "version": "1.0.0",
     }
@@ -122,7 +123,7 @@ async def health_check():
 @app.post("/scan", response_model=ScanResponse, dependencies=[Depends(verify_api_key)])
 async def start_scan(scan_request: ScanRequest, background_tasks: BackgroundTasks):
     scan_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = now_ist()
 
     scan_cache[scan_id] = {
         "scan_id": scan_id,
@@ -176,7 +177,7 @@ async def cancel_scan(scan_id: str):
     rec = scan_cache[scan_id]
     if rec["status"] == "running":
         rec["status"] = "cancelled"
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
         m.active_scans.labels(service="scanner").dec()
     return {"message": f"Scan {scan_id} cancelled"}
 
@@ -217,7 +218,7 @@ async def execute_scan(scan_id: str, config: ScanConfig):
                 results_count=len(results),
                 vulnerabilities_found=sum(1 for r in results if r.is_security_issue()),
                 config=config.dict(),
-                completed_at=datetime.utcnow(),
+                completed_at=now_ist(),
             )
             session.add(job)
 
@@ -260,7 +261,7 @@ async def execute_scan(scan_id: str, config: ScanConfig):
         rec["vulnerabilities_found"] = sum(1 for r in results if r.is_security_issue())
         rec["status"] = "completed"
         rec["progress"] = 100.0
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
 
         duration = time.time() - start
         m.scan_duration_seconds.labels(service="scanner").observe(duration)
@@ -271,7 +272,7 @@ async def execute_scan(scan_id: str, config: ScanConfig):
         logger.error(f"Scan {scan_id} failed: {e}")
         rec["status"] = "failed"
         rec["error"] = str(e)
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
         m.active_scans.labels(service="scanner").dec()
 
 

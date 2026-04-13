@@ -2105,7 +2105,7 @@ def _get_cert_info(host: str, port: int, ctx: ssl.SSLContext) -> dict:
         datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
         if not_after_str else None
     )
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc).astimezone(__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
     days_remaining = (not_after - now).days if not_after else None
 
     issuer = dict(x[0] for x in cert.get("issuer", []))

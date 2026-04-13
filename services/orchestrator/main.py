@@ -9,6 +9,7 @@ import os
 import time
 import uuid
 from datetime import datetime
+from shared.utils.timezone import now_ist
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -134,7 +135,7 @@ async def health_check():
     overall = "healthy" if all(s["status"] == "healthy" for s in service_health.values()) else "degraded"
     return {
         "status": overall,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_ist().isoformat(),
         "service": "orchestrator",
         "version": "1.0.0",
         "services": service_health,
@@ -148,7 +149,7 @@ async def health_check():
 @app.post("/orchestrate", response_model=OrchestrationResponse, dependencies=[Depends(verify_api_key)])
 async def start_orchestration(request: OrchestrationRequest, background_tasks: BackgroundTasks):
     orchestration_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = now_ist()
 
     orchestration_cache[orchestration_id] = {
         "orchestration_id": orchestration_id,
@@ -197,7 +198,7 @@ async def cancel_orchestration(orchestration_id: str):
     rec = orchestration_cache[orchestration_id]
     if rec["status"] == "running":
         rec["status"] = "cancelled"
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
         m.active_scans.labels(service="orchestrator").dec()
     return {"message": f"Orchestration {orchestration_id} cancelled", "status": rec["status"]}
 
@@ -325,7 +326,7 @@ async def execute_pipeline(orchestration_id: str, request: OrchestrationRequest)
         # ── Finalise ──────────────────────────────────────────────────────
         rec["status"] = "completed"
         rec["current_stage"] = "done"
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
 
         async with AsyncSessionLocal() as session:
             await session.execute(
@@ -349,7 +350,7 @@ async def execute_pipeline(orchestration_id: str, request: OrchestrationRequest)
         logger.error(f"[{orchestration_id}] Pipeline failed at {rec.get('current_stage')}: {e}")
         rec["status"] = "failed"
         rec["error"] = str(e)
-        rec["completed_at"] = datetime.utcnow()
+        rec["completed_at"] = now_ist()
         async with AsyncSessionLocal() as session:
             await session.execute(
                 update(ScanJobRow)
