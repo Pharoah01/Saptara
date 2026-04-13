@@ -5,6 +5,7 @@ Seven relics. Seven roles. One system.
 """
 
 import os
+import re
 import click
 import httpx
 import json
@@ -49,9 +50,6 @@ def cli(ctx, orchestrator_url, api_key, verbose):
     ctx.obj["verbose"] = verbose
 
 
-# ---------------------------------------------------------------------------
-# health
-# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.pass_context
@@ -95,9 +93,6 @@ def health(ctx):
             console.print(f"[red]❌ Error: {e}[/red]")
 
 
-# ---------------------------------------------------------------------------
-# scan
-# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.option("--target", "-t", required=True, help="Target URL to scan")
@@ -122,7 +117,6 @@ def scan(ctx, target, categories, intensity, wait):
             "cors_misconfiguration", "file_upload_security",
         ]
 
-    # Ensure target has a scheme
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
 
@@ -165,9 +159,6 @@ def scan(ctx, target, categories, intensity, wait):
         console.print(f"[red]❌ Error: {e}[/red]")
 
 
-# ---------------------------------------------------------------------------
-# status
-# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.argument("orchestration_id")
@@ -188,7 +179,10 @@ def status(ctx, orchestration_id):
             table.add_row("Status", d.get("status", "unknown"))
             table.add_row("Progress", f"{d.get('progress', 0):.1f}%")
             table.add_row("Current Stage", d.get("current_stage", "—"))
-            table.add_row("Started", str(d.get("started_at", "")))
+            if d.get("error"):
+                table.add_row("Error", f"[red]{d['error']}[/red]")
+            if d.get("started_at"):
+                table.add_row("Started", str(d["started_at"]))
             if d.get("completed_at"):
                 table.add_row("Completed", str(d["completed_at"]))
             console.print(table)
@@ -201,15 +195,12 @@ def status(ctx, orchestration_id):
         console.print(f"[red]❌ Error: {e}[/red]")
 
 
-# ---------------------------------------------------------------------------
-# results
-# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.argument("orchestration_id")
 @click.option("--format", "-f", type=click.Choice(["table", "json"]),
               default="table", help="Output format")
-@click.option("--save", "-s", help="Save results to a JSON file")
+@click.option("--save", "-s", help="Save results to a specific path (default: results/<domain>_<timestamp>.json)")
 @click.pass_context
 def results(ctx, orchestration_id, format, save):
     """Get results of a completed scan"""
@@ -224,19 +215,25 @@ def results(ctx, orchestration_id, format, save):
                 console.print(JSON(json.dumps(data, indent=2, default=str)))
             else:
                 _display_results_table(data)
-            if save:
-                with open(save, "w") as f:
-                    json.dump(data, f, indent=2, default=str)
-                console.print(f"[green]💾 Saved to {save}[/green]")
+
+            # Determine save path — always save, default to results/ dir
+            if not save:
+                os.makedirs("results", exist_ok=True)
+                target = data.get("config", {}).get("target_url", "unknown")
+                domain = re.sub(r"https?://", "", target).rstrip("/").replace("/", "_")
+                domain = re.sub(r"[^\w\-.]", "_", domain)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                save = os.path.join("results", f"{domain}_{timestamp}.json")
+
+            with open(save, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+            console.print(f"[green]💾 Saved to {save}[/green]")
         else:
             console.print(f"[red]❌ {resp.status_code}: {resp.text}[/red]")
     except Exception as e:
         console.print(f"[red]❌ Error: {e}[/red]")
 
 
-# ---------------------------------------------------------------------------
-# cancel
-# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.argument("orchestration_id")
@@ -259,9 +256,6 @@ def cancel(ctx, orchestration_id):
         console.print(f"[red]❌ Error: {e}[/red]")
 
 
-# ---------------------------------------------------------------------------
-# list-scans
-# ---------------------------------------------------------------------------
 
 @cli.command(name="list-scans")
 @click.pass_context
@@ -295,9 +289,6 @@ def list_scans(ctx):
         console.print(f"[red]❌ Error: {e}[/red]")
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _wait_for_completion(url: str, oid: str, headers: dict):
     with Progress(SpinnerColumn(), TextColumn("{task.description}"),
@@ -312,6 +303,8 @@ def _wait_for_completion(url: str, oid: str, headers: dict):
                     progress.update(task, completed=d.get("progress", 0),
                                     description=f"Scanning... {d.get('status', '')}")
                     if d.get("status") in ("completed", "failed", "cancelled"):
+                        if d.get("status") == "failed" and d.get("error"):
+                            console.print(f"\n[red]❌ Pipeline failed: {d['error']}[/red]")
                         break
             except Exception:
                 break
@@ -322,7 +315,18 @@ def _wait_for_completion(url: str, oid: str, headers: dict):
         resp = httpx.get(f"{url}/orchestration/{oid}/results",
                          headers=headers, timeout=10.0)
         if resp.status_code == 200:
-            _display_results_table(resp.json())
+            data = resp.json()
+            _display_results_table(data)
+            # Auto-save to results/
+            os.makedirs("results", exist_ok=True)
+            target = data.get("config", {}).get("target_url", "unknown")
+            domain = re.sub(r"https?://", "", target).rstrip("/").replace("/", "_")
+            domain = re.sub(r"[^\w\-.]", "_", domain)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join("results", f"{domain}_{timestamp}.json")
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+            console.print(f"[green]💾 Saved to {path}[/green]")
     except Exception as e:
         console.print(f"[red]❌ Could not fetch results: {e}[/red]")
 
@@ -336,7 +340,6 @@ def _display_results_table(data: Dict[str, Any]):
 
         console.print(f"\n[bold cyan]── {svc.title()} ──[/bold cyan]")
 
-        # service cache dict is nested under "results"
         results = svc_data.get("results", {}).get("results", [])
         if not results:
             status = svc_data.get("status", "unknown")

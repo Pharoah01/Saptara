@@ -73,3 +73,13 @@ async def get_session() -> AsyncSession:
     """Yield a database session"""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+def sanitize(value: str | None) -> str | None:
+    """
+    Strip null bytes from strings before inserting into PostgreSQL.
+    asyncpg raises CharacterNotInRepertoireError on \\x00 in UTF-8 columns.
+    """
+    if value is None:
+        return None
+    return value.replace("\x00", "")

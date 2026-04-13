@@ -9,7 +9,6 @@ from fastapi.security import APIKeyHeader
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-# Load from env; fall back to a default dev key so services start without config
 _RAW = os.getenv("API_KEYS", "saptara-dev-key-change-me")
 VALID_API_KEYS: set[str] = {k.strip() for k in _RAW.split(",") if k.strip()}
 

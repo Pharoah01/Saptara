@@ -19,7 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from shared.models import ScanConfig, TestStatus
 from shared.utils import get_logger
 from shared.auth import verify_api_key
-from shared.db import init_db, AsyncSessionLocal, ScanResultRow, ScanJobRow
+from shared.db import init_db, AsyncSessionLocal, ScanResultRow, ScanJobRow, sanitize
 from shared import metrics as m
 from .validator_engine import ValidatorEngine
 
@@ -164,10 +164,10 @@ async def execute_validation(validation_id: str, config: ScanConfig):
                     vulnerability_level=result.vulnerability_level,
                     target_url=result.target_url,
                     method=result.method,
-                    payload=result.payload,
+                    payload=sanitize(result.payload),
                     response_code=result.response_code,
                     response_time=result.response_time,
-                    details=result.details,
+                    details=sanitize(result.details),
                 ))
                 m.tests_total.labels(service="validator", category=result.category,
                                      status=result.status.value).inc()

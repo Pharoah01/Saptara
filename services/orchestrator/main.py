@@ -279,6 +279,15 @@ async def execute_pipeline(orchestration_id: str, request: OrchestrationRequest)
         rec["progress"] = 33.0
         await _persist_progress(orchestration_id, rec)
 
+        # Hard stop — if scanner failed, there is nothing meaningful for
+        # simulator or validator to work with.
+        if scanner_result.get("status") == "failed":
+            scanner_error = (
+                scanner_result.get("results", {}).get("error")
+                or "Scanner stage failed — check scanner logs"
+            )
+            raise RuntimeError(f"Scanner failed: {scanner_error}")
+
         # Extract vulnerability list from scanner to feed simulator
         scanner_findings = _extract_vulnerabilities(scanner_result)
         logger.info(

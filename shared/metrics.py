@@ -4,7 +4,6 @@ Prometheus metrics shared across all SAPTARA services
 
 from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry, REGISTRY
 
-# --- Scan / test counters ---
 scans_total = Counter(
     "saptara_scans_total",
     "Total number of scans started",
@@ -23,7 +22,6 @@ vulnerabilities_found = Counter(
     ["service", "severity"],
 )
 
-# --- Latency ---
 scan_duration_seconds = Histogram(
     "saptara_scan_duration_seconds",
     "Time taken to complete a full scan",
@@ -38,7 +36,6 @@ http_request_duration_seconds = Histogram(
     buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
 )
 
-# --- Active scans gauge ---
 active_scans = Gauge(
     "saptara_active_scans",
     "Number of scans currently running",

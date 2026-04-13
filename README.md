@@ -1,359 +1,316 @@
 # 🛡️ Project SAPTARA
-## *Seven relics. Seven roles. One system.*
+*Seven relics. Seven roles. One system.*
 
-**SAPTARA** — *a system where protection emerges from unity.*
-
-A comprehensive, production-ready security testing framework built with microservices architecture. Inspired by the concept of seven protective layers working together as a unified system, each service represents a distinct role within the security architecture, emphasizing collaboration, resilience, and layered protection.
-
-## 🏗️ The Seven Relics - Architecture Overview
-
-SAPTARA is composed of seven core protective layers, each serving a distinct role in the unified security system:
-
-### The Seven Relics (Core Services)
-- **🎯 The Orchestrator** (Port 8000) - *The Conductor* - Coordinates and harmonizes all security testing services
-- **🔍 The Scanner** (Port 8001) - *The Seeker* - Universal vulnerability scanner with 12+ test categories  
-- **✅ The Validator** (Port 8002) - *The Guardian* - Security feature validation and verification service
-- **🚀 The Simulator** (Port 8003) - *The Challenger* - Attack simulation and penetration testing
-- **🗄️ The Keeper** (PostgreSQL, Port 5432) - *The Memory* - Persistent storage for all test results and knowledge
-- **🔄 The Messenger** (Redis, Port 6379) - *The Swift* - Real-time communication and task coordination
-- **📊 The Observer** (Prometheus + Grafana, Ports 9090/3000) - *The Watcher* - Monitoring, metrics, and insights
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Docker and Docker Compose
-- Python 3.11+ (for local development)
-- 4GB+ RAM recommended
-
-### 1. Clone and Setup
-```bash
-git clone <repository-url>
-cd security-test
-```
-
-### 2. Start All Services
-```bash
-# Start all services with Docker Compose
-docker-compose up -d
-
-# Check service health
-curl http://localhost:8000/health
-```
-
-### 3. Invoke Your First Security Test
-```bash
-# Using the Orchestrator (The Conductor)
-curl -X POST "http://localhost:8000/orchestrate" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "config": {
-      "target_url": "https://example.com",
-      "test_categories": ["sql_injection", "xss", "path_traversal"],
-      "intensity": "medium"
-    },
-    "services": ["scanner", "validator"],
-    "parallel": true
-  }'
-```
-
-## 🔧 Development Setup
-
-### Local Development
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Start individual services for development
-python -m uvicorn services.orchestrator.main:app --reload --port 8000
-python -m uvicorn services.scanner.main:app --reload --port 8001
-```
-
-### Environment Variables
-Create a `.env` file in the project root:
-```env
-# Service Configuration
-LOG_LEVEL=INFO
-DATABASE_URL=postgresql://security_user:security_pass@localhost:5432/security_test
-REDIS_URL=redis://localhost:6379
-
-# Security Configuration
-MAX_CONCURRENT_SCANS=10
-DEFAULT_TIMEOUT=30
-RATE_LIMIT_PER_SECOND=10
-
-# Monitoring
-PROMETHEUS_ENABLED=true
-GRAFANA_ADMIN_PASSWORD=admin
-```
-
-## 📊 API Documentation
-
-### Orchestrator Service (Port 8000)
-- `GET /` - Health check
-- `GET /health` - Detailed health check with service status
-- `POST /orchestrate` - Start orchestrated security testing
-- `GET /orchestration/{id}/status` - Get orchestration status
-- `GET /orchestration/{id}/results` - Get complete results
-- `GET /services` - List all available services
-
-### Scanner Service (Port 8001)
-- `GET /` - Health check
-- `POST /scan` - Start vulnerability scan
-- `GET /scan/{id}/status` - Get scan status
-- `GET /scan/{id}/results` - Get scan results
-- `DELETE /scan/{id}` - Cancel running scan
-
-### Interactive API Documentation
-- Orchestrator: http://localhost:8000/docs
-- Scanner: http://localhost:8001/docs
-- Validator: http://localhost:8002/docs
-- Simulator: http://localhost:8003/docs
-
-## 🔍 Test Categories
-
-### The Scanner (The Seeker)
-1. **SQL Injection** - Database manipulation attacks
-2. **Path Traversal** - File system access attempts
-3. **XSS** - Cross-site scripting vulnerabilities
-4. **Authentication Bypass** - Access control circumvention
-5. **Rate Limiting** - Request flooding protection
-6. **Bot Detection** - Automated tool identification
-7. **API Enumeration** - Endpoint discovery
-8. **File Upload Security** - Malicious file upload tests
-9. **Information Disclosure** - Sensitive data exposure
-10. **CSRF Protection** - Cross-site request forgery
-11. **Security Headers** - HTTP security headers validation
-12. **SSL/TLS Security** - Transport layer security
-
-### The Validator (The Guardian)
-- Bot Protection Middleware validation
-- Security Middleware effectiveness
-- Rate limiting configuration
-- Session security implementation
-- Input validation mechanisms
-
-### The Simulator (The Challenger)
-- Targeted attack simulations
-- Penetration testing scenarios
-- Security measure bypass attempts
-- Real-world attack patterns
-
-## 📈 Monitoring and Observability
-
-### The Observer's Metrics (Prometheus)
-- Request rates and response times across all relics
-- Error rates and success rates for each protective layer
-- Service health and availability monitoring
-- Resource utilization and performance metrics
-
-### The Watcher's Dashboards (Grafana)
-- SAPTARA System Overview
-- Individual Relic Performance Metrics
-- Vulnerability Detection Trends
-- Unified System Resource Monitoring
-
-Access Grafana at http://localhost:3000 (admin/admin)
-
-## 🔒 Security Considerations
-
-### Ethical Use
-- **Only test systems you own** or have explicit written permission to test
-- **Unauthorized testing may be illegal** in your jurisdiction
-- **Follow responsible disclosure** practices for any vulnerabilities found
-
-### Production Deployment
-- Use strong authentication for all services
-- Enable TLS/SSL for all communications
-- Implement proper network segmentation
-- Regular security updates and patches
-- Monitor and log all activities
-
-## 🧪 Testing
-
-### Unit Tests
-```bash
-# Run unit tests
-pytest tests/unit/
-
-# Run with coverage
-pytest tests/unit/ --cov=services --cov-report=html
-```
-
-### Integration Tests
-```bash
-# Run integration tests
-pytest tests/integration/
-
-# Test specific service
-pytest tests/integration/test_scanner.py
-```
-
-### Load Testing
-```bash
-# Install load testing tools
-pip install locust
-
-# Run load tests
-locust -f tests/load/test_orchestrator.py --host=http://localhost:8000
-```
-
-## 📦 Deployment
-
-### Docker Deployment
-```bash
-# Build and deploy
-docker-compose up -d --build
-
-# Scale services
-docker-compose up -d --scale scanner=3 --scale validator=2
-
-# View logs
-docker-compose logs -f orchestrator
-```
-
-### Kubernetes Deployment
-```bash
-# Apply Kubernetes manifests
-kubectl apply -f k8s/
-
-# Check deployment status
-kubectl get pods -n security-test
-```
-
-### Production Checklist
-- [ ] Configure proper resource limits
-- [ ] Set up persistent storage
-- [ ] Configure backup strategies
-- [ ] Implement monitoring and alerting
-- [ ] Set up log aggregation
-- [ ] Configure security policies
-- [ ] Test disaster recovery procedures
-
-## 🔧 Configuration
-
-### Service Configuration
-Each service can be configured via environment variables or configuration files:
-
-```yaml
-# config/scanner.yml
-scanner:
-  max_concurrent_scans: 10
-  default_timeout: 30
-  payload_database: "extended"
-  rate_limiting:
-    requests_per_second: 10
-    burst_size: 20
-```
-
-### Database Configuration
-```yaml
-# config/database.yml
-database:
-  host: localhost
-  port: 5432
-  name: security_test
-  user: security_user
-  password: security_pass
-  pool_size: 20
-  max_overflow: 30
-```
-
-## 🐛 Debugging
-
-### Service Logs
-```bash
-# View orchestrator logs
-docker-compose logs -f orchestrator
-
-# View all service logs
-docker-compose logs -f
-
-# Debug specific service
-docker-compose exec scanner python -m pdb services/scanner/main.py
-```
-
-### Health Checks
-```bash
-# Check all service health
-curl http://localhost:8000/health
-
-# Check individual service
-curl http://localhost:8001/health
-```
-
-### Database Debugging
-```bash
-# Connect to database
-docker-compose exec database psql -U security_user -d security_test
-
-# View test results
-SELECT * FROM test_results ORDER BY timestamp DESC LIMIT 10;
-```
-
-## 🤝 Contributing
-
-### Development Workflow
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Run the test suite
-6. Submit a pull request
-
-### Code Style
-- Follow PEP 8 for Python code
-- Use type hints for all functions
-- Add docstrings for all public methods
-- Format code with Black
-- Lint with flake8
-
-### Adding New Test Categories
-1. Add the test category to `shared/models/scan_config.py`
-2. Implement the test logic in the appropriate service
-3. Add payloads to the payload database
-4. Write unit and integration tests
-5. Update documentation
-
-## 📚 Documentation
-
-### Quick Start
-- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Setup and first security test in 5 minutes
-- **[CLI Reference](docs/CLI_REFERENCE.md)** - Complete command-line interface documentation
-
-### Architecture & APIs
-- **[Architecture Guide](docs/ARCHITECTURE_GUIDE.md)** - System design and microservices architecture
-- **[API Documentation](docs/API_DOCUMENTATION.md)** - REST API reference for all services
-
-### Deployment & Configuration
-- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)** - Docker, Kubernetes, and cloud deployment
-- **[Configuration Guide](docs/CONFIGURATION_GUIDE.md)** - Environment and service configuration
-
-### Development & Testing
-- **[Development Guide](docs/DEVELOPMENT_GUIDE.md)** - Local development setup and guidelines
-- **[Testing Guide](docs/TESTING_GUIDE.md)** - Unit, integration, and end-to-end testing
-
-### Additional Resources
-- **[Security Best Practices](docs/SECURITY_BEST_PRACTICES.md)** - Security guidelines and best practices
-- **[Troubleshooting Guide](docs/TROUBLESHOOTING_GUIDE.md)** - Common issues and solutions
-- **[Documentation Index](docs/README.md)** - Complete documentation overview
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- Create an issue for bug reports
-- Join our Discord for community support
-- Check the documentation for common questions
-- Contact the maintainers for security issues
+SAPTARA is a microservices-based security testing framework. Give it a target URL and it runs a full three-stage pipeline — **Scanner → Simulator → Validator** — persisting every result to PostgreSQL.
 
 ---
 
-**Remember**: SAPTARA is for authorized security testing only. The seven relics work in unity to protect - ensure you have proper permission before testing any system! 🛡️
+## Architecture
 
-*"In unity, the seven relics find their strength. In separation, they are but tools. Together, they are SAPTARA."*
+| Relic | Role | Port |
+|---|---|---|
+| Orchestrator | Runs the pipeline, aggregates results | 8000 |
+| Scanner | 17-category vulnerability scanner | 8001 |
+| Simulator | Multi-step exploit & blind-spot coverage | 8002 |
+| Validator | Confirms defences are in place | 8003 |
+| PostgreSQL | Persistent result storage | 5432 |
+| Redis | Available for caching / queuing | 6379 |
+| Prometheus | Metrics scraping | 9090 |
+| Grafana | Dashboards | 3000 |
+
+### Pipeline flow
+
+```
+POST /orchestrate
+      │
+      ▼
+  [Scanner]  ── finds vulnerabilities (17 categories)
+      │
+      ▼
+  [Simulator] ── exploits findings + covers blind spots
+      │           (race conditions, stored XSS, IDOR,
+      │            second-order SQLi, JWT confusion, etc.)
+      ▼
+  [Validator] ── confirms which defences are active
+      │
+      ▼
+  Results saved to PostgreSQL + returned to client
+```
+
+---
+
+## Prerequisites
+
+- Docker and Docker Compose v2
+- Python 3.11+ (local dev only)
+- 4 GB RAM minimum
+
+---
+
+## Running with Docker (recommended)
+
+### 1. Copy and configure environment
+
+```bash
+cp .env.example .env
+```
+
+The only value you must change before running:
+
+```env
+# .env
+API_KEYS=your-secret-key-here   # used by all services and the CLI
+```
+
+Everything else has working defaults for local use.
+
+### 2. Build the base image first
+
+The four services share a common base image. Build it once:
+
+```bash
+docker compose build base
+```
+
+Or use the Makefile shortcut:
+
+```bash
+make build
+```
+
+### 3. Start all services
+
+```bash
+docker compose up -d
+```
+
+Or:
+
+```bash
+make up
+```
+
+Services start in dependency order. The orchestrator waits for PostgreSQL to be healthy before accepting requests.
+
+### 4. Verify everything is up
+
+```bash
+curl http://localhost:8000/health
+```
+
+Expected response shows all three downstream services as `healthy`.
+
+Or use the Makefile:
+
+```bash
+make health
+```
+
+---
+
+## Running locally (without Docker)
+
+Requires PostgreSQL running and accessible.
+
+### 1. Create and activate a virtual environment
+
+```bash
+python3 -m venv env
+source env/bin/activate
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Set environment variables
+
+```bash
+export DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@localhost:5432/saptara_knowledge
+export API_KEYS=saptara-dev-key-change-me
+```
+
+Or put them in a `.env` file — the CLI and services load it automatically via `python-dotenv`.
+
+### 4. Start each service in a separate terminal
+
+```bash
+# Terminal 1 — Scanner
+python -m uvicorn services.scanner.main:app --port 8001
+
+# Terminal 2 — Simulator
+python -m uvicorn services.simulator.main:app --port 8003
+
+# Terminal 3 — Validator
+python -m uvicorn services.validator.main:app --port 8002
+
+# Terminal 4 — Orchestrator
+python -m uvicorn services.orchestrator.main:app --port 8000
+```
+
+---
+
+## Running a scan
+
+### Using the CLI
+
+```bash
+# Basic scan — medium intensity, common categories
+python cli.py --api-key your-secret-key-here scan --target https://example.com
+
+# Light scan, specific categories
+python cli.py -k your-secret-key-here scan \
+  --target https://example.com \
+  --intensity light \
+  --categories sql_injection xss security_headers
+
+# Heavy scan, wait for results and print them
+python cli.py -k your-secret-key-here scan \
+  --target https://example.com \
+  --intensity heavy \
+  --wait
+
+# Save results to a file
+python cli.py -k your-secret-key-here results <orchestration-id> --save results.json
+```
+
+Available intensity levels: `light`, `medium`, `heavy`
+
+Available categories:
+```
+sql_injection       xss                 path_traversal
+command_injection   xxe_injection       authentication_bypass
+api_enumeration     idor                ssl_tls_security
+information_disclosure  security_headers  cors_misconfiguration
+rate_limiting       csrf_protection     file_upload_security
+ssrf                bot_detection
+```
+
+### Using curl directly
+
+```bash
+# Start a scan
+curl -X POST http://localhost:8000/orchestrate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: saptara-dev-key-change-me" \
+  -d '{
+    "config": {
+      "target_url": "https://example.com",
+      "test_categories": ["sql_injection", "xss", "security_headers"],
+      "intensity": "medium"
+    }
+  }'
+
+# Returns: { "orchestration_id": "...", "status": "running", ... }
+
+# Poll status
+curl http://localhost:8000/orchestration/<id>/status \
+  -H "X-API-Key: saptara-dev-key-change-me"
+
+# Get results
+curl http://localhost:8000/orchestration/<id>/results \
+  -H "X-API-Key: saptara-dev-key-change-me"
+```
+
+### CLI reference
+
+```bash
+python cli.py --help
+
+Commands:
+  health      Check health of all services
+  scan        Start a scan (Scanner → Simulator → Validator)
+  status      Check status of a running scan
+  results     Fetch results of a completed scan
+  cancel      Cancel a running scan
+  list-scans  List all scans
+```
+
+---
+
+## Running tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+All 14 tests should pass. No database or running services required — the engine tests run against `https://example.com` with real HTTP calls.
+
+---
+
+## Viewing results
+
+### Interactive API docs
+
+| Service | URL |
+|---|---|
+| Orchestrator | http://localhost:8000/docs |
+| Scanner | http://localhost:8001/docs |
+| Validator | http://localhost:8002/docs |
+| Simulator | http://localhost:8003/docs |
+
+### Grafana dashboards
+
+Open http://localhost:3000 — login with `admin` / `saptara_vision`
+
+### PostgreSQL directly
+
+```bash
+docker compose exec database psql -U saptara_keeper -d saptara_knowledge
+
+# All scan jobs
+SELECT scan_id, service_name, status, results_count, vulnerabilities_found, started_at
+FROM scan_jobs ORDER BY started_at DESC LIMIT 20;
+
+# Vulnerabilities from a specific scan
+SELECT category, test_name, status, vulnerability_level, details
+FROM scan_results
+WHERE scan_id = '<your-scan-id>'
+  AND status IN ('vulnerable', 'failed')
+ORDER BY vulnerability_level;
+```
+
+---
+
+## Stopping services
+
+```bash
+docker compose down          # stop containers, keep volumes
+docker compose down -v       # stop containers and delete DB data
+```
+
+---
+
+## Useful Makefile targets
+
+```bash
+make build    # build base image + all service images
+make up       # docker compose up -d
+make down     # docker compose down
+make logs     # follow all logs
+make health   # curl all four health endpoints
+make test     # run pytest
+make clean    # remove __pycache__, .pyc, coverage files
+```
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `API_KEYS` | `saptara-dev-key-change-me` | Comma-separated valid API keys |
+| `DATABASE_URL` | postgres on `database:5432` | SQLAlchemy async URL |
+| `SCANNER_URL` | `http://scanner:8001` | Scanner service URL (orchestrator) |
+| `VALIDATOR_URL` | `http://validator:8002` | Validator service URL (orchestrator) |
+| `SIMULATOR_URL` | `http://simulator:8003` | Simulator service URL (orchestrator) |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `ORCHESTRATOR_URL` | `http://localhost:8000` | Used by the CLI |
+
+---
+
+## Ethical use
+
+Only test systems you own or have explicit written permission to test. Unauthorised security testing is illegal in most jurisdictions.

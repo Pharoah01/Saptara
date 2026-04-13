@@ -17,6 +17,9 @@ services:
       dockerfile: services/orchestrator/Dockerfile
     ports:
       - "8000:8000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - SERVICE_NAME=orchestrator
       - RELIC_ROLE=conductor
@@ -46,6 +49,9 @@ services:
       dockerfile: services/scanner/Dockerfile
     ports:
       - "8001:8001"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - SERVICE_NAME=scanner
       - RELIC_ROLE=seeker
@@ -66,6 +72,9 @@ services:
       dockerfile: services/validator/Dockerfile
     ports:
       - "8002:8002"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - SERVICE_NAME=validator
       - RELIC_ROLE=guardian
@@ -86,6 +95,9 @@ services:
       dockerfile: services/simulator/Dockerfile
     ports:
       - "8003:8003"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - SERVICE_NAME=simulator
       - RELIC_ROLE=challenger
