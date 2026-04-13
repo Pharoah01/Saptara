@@ -32,13 +32,40 @@ app = FastAPI(
 )
 
 scanner_engine = ScannerEngine()
-# In-memory cache for fast status lookups (DB is source of truth)
+# In-memory cache for fast status lookups — DB is source of truth
 scan_cache: Dict[str, Dict[str, Any]] = {}
 
 
 @app.on_event("startup")
 async def startup():
     await init_db()
+    await _reload_cache_from_db()
+
+
+async def _reload_cache_from_db():
+    """Restore scan job records from DB so status/results survive a restart."""
+    from sqlalchemy import select
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ScanJobRow).where(ScanJobRow.service_name == "scanner")
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                status = row.status if row.status != "running" else "interrupted"
+                scan_cache[row.scan_id] = {
+                    "scan_id": row.scan_id,
+                    "config": row.config or {},
+                    "status": status,
+                    "progress": row.progress or 0.0,
+                    "results": [],          # full results loaded on demand from scan_results table
+                    "vulnerabilities_found": row.vulnerabilities_found or 0,
+                    "started_at": row.started_at,
+                    "completed_at": row.completed_at,
+                }
+            logger.info(f"Restored {len(rows)} scan records from DB")
+    except Exception as e:
+        logger.warning(f"Could not restore scan cache from DB: {e}")
 
 
 # ---------------------------------------------------------------------------

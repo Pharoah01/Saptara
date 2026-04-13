@@ -1549,63 +1549,6 @@ class ScannerEngine:
 
         return results
 
-
-# ------------------------------------------------------------------
-# SSL helper functions (blocking — run in executor)
-# ------------------------------------------------------------------
-
-def _ssl_connect(host: str, port: int, ctx: ssl.SSLContext) -> bool:
-    """Attempt TLS handshake; return True if successful."""
-    try:
-        with socket.create_connection((host, port), timeout=5) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host):
-                return True
-    except Exception:
-        return False
-
-
-def _get_cert_info(host: str, port: int, ctx: ssl.SSLContext) -> dict:
-    """Return certificate metadata dict."""
-    with socket.create_connection((host, port), timeout=5) as sock:
-        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-            cert = ssock.getpeercert()
-
-    not_after_str = cert.get("notAfter", "")
-    not_after = (
-        datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
-        if not_after_str else None
-    )
-    now = datetime.datetime.utcnow()
-    days_remaining = (not_after - now).days if not_after else None
-
-    issuer = dict(x[0] for x in cert.get("issuer", []))
-    subject = dict(x[0] for x in cert.get("subject", []))
-
-    return {
-        "not_after": not_after_str,
-        "expired": not_after is not None and not_after < now,
-        "expiring_soon": days_remaining is not None and days_remaining < 30,
-        "days_remaining": days_remaining,
-        "self_signed": issuer.get("commonName") == subject.get("commonName"),
-        "subject_cn": subject.get("commonName"),
-        "issuer_cn": issuer.get("commonName"),
-    }
-
-
-# ------------------------------------------------------------------
-# Recommendation helpers
-# ------------------------------------------------------------------
-
-def _sqli_recommendation(level) -> Optional[str]:
-    if level is None:
-        return None
-    return (
-        "Use parameterised queries / prepared statements; "
-        "never concatenate user input into SQL; "
-        "apply least-privilege DB accounts; "
-        "enable WAF SQL injection rules"
-    )
-
     # ------------------------------------------------------------------
     # A03 — OS Command Injection
     # Injects shell metacharacters into parameters that may reach exec()
@@ -2131,3 +2074,64 @@ def _sqli_recommendation(level) -> Optional[str]:
                     await asyncio.sleep(config.delay)
 
         return results
+
+
+
+
+    # ------------------------------------------------------------------
+    # SSL helper functions (blocking — run in executor)
+    # ------------------------------------------------------------------
+
+
+
+def _ssl_connect(host: str, port: int, ctx: ssl.SSLContext) -> bool:
+    """Attempt TLS handshake; return True if successful."""
+    try:
+        with socket.create_connection((host, port), timeout=5) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host):
+                return True
+    except Exception:
+        return False
+
+
+def _get_cert_info(host: str, port: int, ctx: ssl.SSLContext) -> dict:
+    """Return certificate metadata dict."""
+    with socket.create_connection((host, port), timeout=5) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            cert = ssock.getpeercert()
+
+    not_after_str = cert.get("notAfter", "")
+    not_after = (
+        datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
+        if not_after_str else None
+    )
+    now = datetime.datetime.utcnow()
+    days_remaining = (not_after - now).days if not_after else None
+
+    issuer = dict(x[0] for x in cert.get("issuer", []))
+    subject = dict(x[0] for x in cert.get("subject", []))
+
+    return {
+        "not_after": not_after_str,
+        "expired": not_after is not None and not_after < now,
+        "expiring_soon": days_remaining is not None and days_remaining < 30,
+        "days_remaining": days_remaining,
+        "self_signed": issuer.get("commonName") == subject.get("commonName"),
+        "subject_cn": subject.get("commonName"),
+        "issuer_cn": issuer.get("commonName"),
+    }
+
+
+# ------------------------------------------------------------------
+# Recommendation helpers
+# ------------------------------------------------------------------
+
+def _sqli_recommendation(level) -> Optional[str]:
+    if level is None:
+        return None
+    return (
+        "Use parameterised queries / prepared statements; "
+        "never concatenate user input into SQL; "
+        "apply least-privilege DB accounts; "
+        "enable WAF SQL injection rules"
+    )

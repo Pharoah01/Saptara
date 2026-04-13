@@ -3,7 +3,7 @@ Shared data models for the security testing suite
 """
 
 from .test_result import TestResult, TestStatus, VulnerabilityLevel
-from .scan_config import ScanConfig, TestCategory
+from .scan_config import ScanConfig, TestCategory, IntensityLevel
 from .target import Target, TargetType
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     'VulnerabilityLevel',
     'ScanConfig',
     'TestCategory',
+    'IntensityLevel',
     'Target',
     'TargetType'
 ]

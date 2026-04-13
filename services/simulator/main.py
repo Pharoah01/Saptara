@@ -38,6 +38,33 @@ simulation_cache: Dict[str, Dict[str, Any]] = {}
 @app.on_event("startup")
 async def startup():
     await init_db()
+    await _reload_cache_from_db()
+
+
+async def _reload_cache_from_db():
+    """Restore simulation records from DB on startup."""
+    from sqlalchemy import select
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ScanJobRow).where(ScanJobRow.service_name == "simulator")
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                status = row.status if row.status != "running" else "interrupted"
+                simulation_cache[row.scan_id] = {
+                    "simulation_id": row.scan_id,
+                    "config": row.config or {},
+                    "status": status,
+                    "progress": row.progress or 0.0,
+                    "results": [],
+                    "attacks_simulated": row.results_count or 0,
+                    "started_at": row.started_at,
+                    "completed_at": row.completed_at,
+                }
+            logger.info(f"Restored {len(rows)} simulation records from DB")
+    except Exception as e:
+        logger.warning(f"Could not restore simulation cache from DB: {e}")
 
 
 @app.get("/metrics", include_in_schema=False)

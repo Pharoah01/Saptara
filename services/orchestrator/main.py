@@ -1,6 +1,7 @@
 """
 Security Testing Orchestrator Microservice
-Coordinates and manages all security testing services
+Fixed pipeline: Scanner → Simulator → Validator (always sequential)
+Scanner finds vulnerabilities, Simulator exploits them, Validator confirms defences.
 """
 
 import asyncio
@@ -35,10 +36,14 @@ app = FastAPI(
 )
 
 SERVICES = {
-    "scanner": os.getenv("SCANNER_URL", "http://scanner:8001"),
+    "scanner":   os.getenv("SCANNER_URL",   "http://scanner:8001"),
     "validator": os.getenv("VALIDATOR_URL", "http://validator:8002"),
     "simulator": os.getenv("SIMULATOR_URL", "http://simulator:8003"),
 }
+
+# Fixed pipeline order — scanner must run first, simulator uses its findings,
+# validator confirms defences last.
+PIPELINE = ["scanner", "simulator", "validator"]
 
 orchestration_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -58,15 +63,13 @@ async def _reload_cache_from_db():
             )
             rows = result.scalars().all()
             for row in rows:
-                # Mark any jobs that were 'running' when we crashed as 'interrupted'
                 status = row.status if row.status != "running" else "interrupted"
                 orchestration_cache[row.scan_id] = {
                     "orchestration_id": row.scan_id,
                     "config": row.config or {},
-                    "services": (row.config or {}).get("services", []),
-                    "parallel": (row.config or {}).get("parallel", True),
                     "status": status,
                     "progress": row.progress or 0.0,
+                    "current_stage": (row.config or {}).get("current_stage", ""),
                     "service_results": row.service_results or {},
                     "started_at": row.started_at,
                     "completed_at": row.completed_at,
@@ -95,15 +98,13 @@ async def metrics():
 
 class OrchestrationRequest(BaseModel):
     config: ScanConfig
-    services: List[str] = ["scanner", "validator", "simulator"]
-    parallel: bool = True
 
 
 class OrchestrationResponse(BaseModel):
     orchestration_id: str
     status: str
     message: str
-    services_started: List[str]
+    pipeline: List[str]
     started_at: datetime
 
 
@@ -152,25 +153,25 @@ async def start_orchestration(request: OrchestrationRequest, background_tasks: B
     orchestration_cache[orchestration_id] = {
         "orchestration_id": orchestration_id,
         "config": request.config.dict(),
-        "services": request.services,
-        "parallel": request.parallel,
         "status": "running",
         "progress": 0.0,
+        "current_stage": "scanner",
         "service_results": {},
         "started_at": now,
         "completed_at": None,
+        "error": None,
     }
 
     m.scans_total.labels(service="orchestrator").inc()
     m.active_scans.labels(service="orchestrator").inc()
-    background_tasks.add_task(execute_orchestration, orchestration_id, request)
-    logger.info(f"Started orchestration {orchestration_id}")
+    background_tasks.add_task(execute_pipeline, orchestration_id, request)
+    logger.info(f"Started orchestration {orchestration_id} for {request.config.target_url}")
 
     return OrchestrationResponse(
         orchestration_id=orchestration_id,
         status="running",
-        message="Orchestration started successfully",
-        services_started=request.services,
+        message="Pipeline started: Scanner → Simulator → Validator",
+        pipeline=PIPELINE,
         started_at=now,
     )
 
@@ -201,6 +202,22 @@ async def cancel_orchestration(orchestration_id: str):
     return {"message": f"Orchestration {orchestration_id} cancelled", "status": rec["status"]}
 
 
+@app.get("/orchestration", dependencies=[Depends(verify_api_key)])
+async def list_orchestrations():
+    return {"orchestrations": [
+        {
+            "orchestration_id": oid,
+            "config": rec.get("config", {}),
+            "status": rec["status"],
+            "progress": rec.get("progress", 0),
+            "current_stage": rec.get("current_stage", ""),
+            "started_at": rec.get("started_at"),
+            "completed_at": rec.get("completed_at"),
+        }
+        for oid, rec in orchestration_cache.items()
+    ]}
+
+
 @app.get("/services", dependencies=[Depends(verify_api_key)])
 async def list_services():
     service_status = {}
@@ -219,16 +236,23 @@ async def list_services():
 
 
 # ---------------------------------------------------------------------------
-# Background orchestration
+# Pipeline execution  (Scanner → Simulator → Validator)
 # ---------------------------------------------------------------------------
 
-async def execute_orchestration(orchestration_id: str, request: OrchestrationRequest):
+async def execute_pipeline(orchestration_id: str, request: OrchestrationRequest):
+    """
+    Run the three-stage pipeline sequentially.
+    - Stage 1 (Scanner):   discovers vulnerabilities
+    - Stage 2 (Simulator): receives scanner findings and attempts exploitation
+    - Stage 3 (Validator): confirms which defences are in place
+    Results of every stage are persisted to DB before the next stage starts.
+    """
     rec = orchestration_cache[orchestration_id]
     start = time.time()
     api_key = os.getenv("API_KEYS", "saptara-dev-key-change-me").split(",")[0].strip()
     headers = {"X-API-Key": api_key}
 
-    # Persist job to DB immediately so it survives a restart
+    # Persist job to DB immediately
     async with AsyncSessionLocal() as session:
         job = ScanJobRow(
             scan_id=orchestration_id,
@@ -236,40 +260,64 @@ async def execute_orchestration(orchestration_id: str, request: OrchestrationReq
             target_url=request.config.target_url,
             status="running",
             progress=0.0,
-            config={**request.config.dict(), "services": request.services, "parallel": request.parallel},
+            config=request.config.dict(),
         )
         session.add(job)
         await session.commit()
 
     try:
-        valid_services = [s for s in request.services if s in SERVICES]
-        total = len(valid_services)
+        # ── Stage 1: Scanner ──────────────────────────────────────────────
+        rec["current_stage"] = "scanner"
+        rec["progress"] = 5.0
+        logger.info(f"[{orchestration_id}] Stage 1/3 — Scanner")
 
-        if request.parallel:
-            tasks = [
-                _call_service(svc, request.config, headers, rec, i, total)
-                for i, svc in enumerate(valid_services)
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for svc, result in zip(valid_services, results):
-                rec["service_results"][svc] = (
-                    {"status": "failed", "error": str(result)}
-                    if isinstance(result, Exception) else result
-                )
-        else:
-            for i, svc in enumerate(valid_services):
-                try:
-                    rec["service_results"][svc] = await _call_service(
-                        svc, request.config, headers, rec, i, total
-                    )
-                except Exception as e:
-                    rec["service_results"][svc] = {"status": "failed", "error": str(e)}
+        scanner_result = await _run_service(
+            "scanner", request.config, headers,
+            extra_body={},
+        )
+        rec["service_results"]["scanner"] = scanner_result
+        rec["progress"] = 33.0
+        await _persist_progress(orchestration_id, rec)
 
-        rec["status"] = "completed"
+        # Extract vulnerability list from scanner to feed simulator
+        scanner_findings = _extract_vulnerabilities(scanner_result)
+        logger.info(
+            f"[{orchestration_id}] Scanner done — "
+            f"{len(scanner_findings)} vulnerabilities found"
+        )
+
+        # ── Stage 2: Simulator ────────────────────────────────────────────
+        rec["current_stage"] = "simulator"
+        logger.info(f"[{orchestration_id}] Stage 2/3 — Simulator")
+
+        # Map scanner findings to attack scenarios
+        scenarios = _findings_to_scenarios(scanner_findings)
+        simulator_result = await _run_service(
+            "simulator", request.config, headers,
+            extra_body={"attack_scenarios": scenarios},
+        )
+        rec["service_results"]["simulator"] = simulator_result
+        rec["progress"] = 66.0
+        await _persist_progress(orchestration_id, rec)
+        logger.info(f"[{orchestration_id}] Simulator done")
+
+        # ── Stage 3: Validator ────────────────────────────────────────────
+        rec["current_stage"] = "validator"
+        logger.info(f"[{orchestration_id}] Stage 3/3 — Validator")
+
+        validator_result = await _run_service(
+            "validator", request.config, headers,
+            extra_body={},
+        )
+        rec["service_results"]["validator"] = validator_result
         rec["progress"] = 100.0
+        logger.info(f"[{orchestration_id}] Validator done")
+
+        # ── Finalise ──────────────────────────────────────────────────────
+        rec["status"] = "completed"
+        rec["current_stage"] = "done"
         rec["completed_at"] = datetime.utcnow()
 
-        # Persist completed state + service_results to DB
         async with AsyncSessionLocal() as session:
             await session.execute(
                 update(ScanJobRow)
@@ -286,10 +334,10 @@ async def execute_orchestration(orchestration_id: str, request: OrchestrationReq
         duration = time.time() - start
         m.scan_duration_seconds.labels(service="orchestrator").observe(duration)
         m.active_scans.labels(service="orchestrator").dec()
-        logger.info(f"Orchestration {orchestration_id} completed in {duration:.1f}s")
+        logger.info(f"[{orchestration_id}] Pipeline completed in {duration:.1f}s")
 
     except Exception as e:
-        logger.error(f"Orchestration {orchestration_id} failed: {e}")
+        logger.error(f"[{orchestration_id}] Pipeline failed at {rec.get('current_stage')}: {e}")
         rec["status"] = "failed"
         rec["error"] = str(e)
         rec["completed_at"] = datetime.utcnow()
@@ -297,64 +345,110 @@ async def execute_orchestration(orchestration_id: str, request: OrchestrationReq
             await session.execute(
                 update(ScanJobRow)
                 .where(ScanJobRow.scan_id == orchestration_id)
-                .values(status="failed", error=str(e), completed_at=rec["completed_at"])
+                .values(
+                    status="failed",
+                    error=str(e),
+                    service_results=rec["service_results"],
+                    completed_at=rec["completed_at"],
+                )
             )
             await session.commit()
         m.active_scans.labels(service="orchestrator").dec()
 
 
-async def _call_service(service_name: str, config: ScanConfig, headers: dict,
-                        rec: dict = None, service_index: int = 0, total_services: int = 1) -> dict:
-    """Start a job on a downstream service and poll until done."""
+async def _persist_progress(orchestration_id: str, rec: dict):
+    """Checkpoint current progress + partial service_results to DB."""
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            update(ScanJobRow)
+            .where(ScanJobRow.scan_id == orchestration_id)
+            .values(
+                progress=rec["progress"],
+                service_results=rec["service_results"],
+            )
+        )
+        await session.commit()
+
+
+async def _run_service(
+    service_name: str,
+    config: ScanConfig,
+    headers: dict,
+    extra_body: dict,
+) -> dict:
+    """
+    POST to a downstream service, poll until done, fetch and return results.
+    Results are already persisted to DB by the service itself.
+    """
     url = SERVICES[service_name]
     endpoint_map = {"scanner": "/scan", "validator": "/validate", "simulator": "/simulate"}
-    endpoint = endpoint_map[service_name]
-    id_key_map = {"scanner": "scan_id", "validator": "validation_id", "simulator": "simulation_id"}
-    id_key = id_key_map[service_name]
+    id_key_map  = {"scanner": "scan_id", "validator": "validation_id", "simulator": "simulation_id"}
 
-    # No timeout on the client — scans can take many minutes
+    endpoint = endpoint_map[service_name]
+    id_key    = id_key_map[service_name]
+    resource  = endpoint.lstrip("/")
+
+    body = {"config": config.dict(), **extra_body}
+
     async with httpx.AsyncClient(headers=headers, timeout=None) as client:
-        r = await client.post(
-            f"{url}{endpoint}",
-            json={"config": config.dict()},
-            timeout=30.0,  # only the initial POST needs a short timeout
-        )
+        # Start the job
+        r = await client.post(f"{url}{endpoint}", json=body, timeout=30.0)
         if r.status_code != 200:
-            raise Exception(f"{service_name} failed to start: {r.text}")
+            raise RuntimeError(f"{service_name} failed to start: {r.status_code} {r.text}")
 
         job_id = r.json()[id_key]
-        resource = endpoint.lstrip("/")
 
+        # Poll until done
         while True:
-            sr = await client.get(
-                f"{url}/{resource}/{job_id}/status",
-                timeout=10.0,
-            )
+            sr = await client.get(f"{url}/{resource}/{job_id}/status", timeout=10.0)
             if sr.status_code != 200:
-                raise Exception(f"Status check failed for {service_name}")
+                raise RuntimeError(f"Status check failed for {service_name}: {sr.status_code}")
 
             data = sr.json()
-
-            # Propagate per-service progress into the orchestration record
-            if rec is not None:
-                svc_progress = data.get("progress", 0)
-                # Overall progress = average across all services, weighted by position
-                base = (service_index / total_services) * 100
-                contribution = (svc_progress / total_services)
-                rec["progress"] = round(base + contribution, 1)
-
             if data["status"] in ("completed", "failed", "cancelled"):
-                rr = await client.get(
-                    f"{url}/{resource}/{job_id}/results",
-                    timeout=10.0,
-                )
+                # Fetch full results (already in DB; this just returns the cache)
+                rr = await client.get(f"{url}/{resource}/{job_id}/results", timeout=10.0)
                 return {
                     "status": data["status"],
                     "service_id": job_id,
-                    "results": rr.json() if rr.status_code == 200 else None,
+                    "results": rr.json() if rr.status_code == 200 else {},
                 }
 
             await asyncio.sleep(3)
+
+
+def _extract_vulnerabilities(scanner_result: dict) -> list:
+    """Pull the list of vulnerable/failed TestResult dicts from a scanner result."""
+    try:
+        all_results = scanner_result.get("results", {}).get("results", [])
+        return [r for r in all_results if r.get("status") in ("vulnerable", "failed")]
+    except Exception:
+        return []
+
+
+def _findings_to_scenarios(findings: list) -> list:
+    """
+    Map scanner vulnerability categories to simulator attack scenarios.
+    Always include basic_attacks; add advanced/pentest based on findings.
+    """
+    scenarios = ["basic_attacks"]
+
+    categories = {f.get("category", "") for f in findings}
+
+    advanced_triggers = {
+        "sql_injection", "authentication_bypass", "command_injection",
+        "xxe_injection", "ssrf", "idor",
+    }
+    pentest_triggers = {
+        "file_upload_security", "cors_misconfiguration", "path_traversal",
+    }
+
+    if categories & advanced_triggers:
+        scenarios.append("advanced_attacks")
+    if categories & pentest_triggers:
+        scenarios.append("penetration_testing")
+
+    return scenarios
 
 
 if __name__ == "__main__":

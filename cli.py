@@ -102,24 +102,25 @@ def health(ctx):
 @cli.command()
 @click.option("--target", "-t", required=True, help="Target URL to scan")
 @click.option("--categories", "-c", multiple=True,
-              help="Test categories (repeatable). Default: sql_injection xss path_traversal security_headers")
+              help="Test categories (repeatable). Default: all categories")
 @click.option("--intensity", "-i",
               type=click.Choice(["light", "medium", "heavy"]), default="medium",
               help="Test intensity level")
-@click.option("--services", "-s", multiple=True, default=["scanner"],
-              help="Services to invoke: scanner, validator, simulator (repeatable)")
-@click.option("--parallel/--sequential", default=True,
-              help="Run services in parallel (default) or sequentially")
 @click.option("--wait", "-w", is_flag=True,
               help="Wait for completion and print results")
 @click.pass_context
-def scan(ctx, target, categories, intensity, services, parallel, wait):
-    """Start a security scan against TARGET"""
+def scan(ctx, target, categories, intensity, wait):
+    """Start a security scan against TARGET (Scanner → Simulator → Validator)"""
     url = ctx.obj["orchestrator_url"]
     headers = auth_headers(ctx)
 
     if not categories:
-        categories = ["sql_injection", "xss", "path_traversal", "security_headers"]
+        categories = [
+            "sql_injection", "xss", "path_traversal", "security_headers",
+            "authentication_bypass", "rate_limiting", "bot_detection",
+            "information_disclosure", "csrf_protection", "ssl_tls_security",
+            "cors_misconfiguration", "file_upload_security",
+        ]
 
     # Ensure target has a scheme
     if not target.startswith(("http://", "https://")):
@@ -132,17 +133,14 @@ def scan(ctx, target, categories, intensity, services, parallel, wait):
             "intensity": intensity,
             "verbose": ctx.obj["verbose"],
         },
-        "services": list(services),
-        "parallel": parallel,
     }
 
     console.print(Panel(
-        f"🛡️ SAPTARA initiating scan for [bold cyan]{target}[/bold cyan]"
+        f"🛡️ SAPTARA initiating scan for [bold cyan]{target}[/bold cyan]\n"
+        f"Pipeline: [yellow]Scanner[/yellow] → [yellow]Simulator[/yellow] → [yellow]Validator[/yellow]"
     ))
     console.print(f"Categories : {', '.join(categories)}")
     console.print(f"Intensity  : {intensity}")
-    console.print(f"Services   : {', '.join(services)}")
-    console.print(f"Mode       : {'parallel' if parallel else 'sequential'}")
 
     try:
         with console.status("[bold green]The relics are awakening..."):
@@ -152,7 +150,7 @@ def scan(ctx, target, categories, intensity, services, parallel, wait):
         if resp.status_code == 200:
             result = resp.json()
             oid = result["orchestration_id"]
-            console.print(f"\n[green]✅ Scan started[/green]")
+            console.print(f"\n[green]✅ Pipeline started[/green]")
             console.print(f"Orchestration ID: [bold]{oid}[/bold]")
 
             if wait:
@@ -189,6 +187,7 @@ def status(ctx, orchestration_id):
             table.add_row("Orchestration ID", orchestration_id)
             table.add_row("Status", d.get("status", "unknown"))
             table.add_row("Progress", f"{d.get('progress', 0):.1f}%")
+            table.add_row("Current Stage", d.get("current_stage", "—"))
             table.add_row("Started", str(d.get("started_at", "")))
             if d.get("completed_at"):
                 table.add_row("Completed", str(d["completed_at"]))
@@ -329,11 +328,19 @@ def _wait_for_completion(url: str, oid: str, headers: dict):
 
 
 def _display_results_table(data: Dict[str, Any]):
-    for svc, svc_data in data.get("service_results", {}).items():
+    total_vulns = 0
+    for svc in ["scanner", "simulator", "validator"]:
+        svc_data = data.get("service_results", {}).get(svc)
+        if not svc_data:
+            continue
+
         console.print(f"\n[bold cyan]── {svc.title()} ──[/bold cyan]")
+
+        # service cache dict is nested under "results"
         results = svc_data.get("results", {}).get("results", [])
         if not results:
-            console.print("[yellow]  No results[/yellow]")
+            status = svc_data.get("status", "unknown")
+            console.print(f"[yellow]  No results (status: {status})[/yellow]")
             continue
 
         table = Table(show_lines=True)
@@ -373,7 +380,10 @@ def _display_results_table(data: Dict[str, Any]):
 
         console.print(table)
         vuln_count = sum(1 for r in results if r.get("status") == "vulnerable")
+        total_vulns += vuln_count
         console.print(f"  {len(results)} tests — [red]{vuln_count} vulnerable[/red]")
+
+    console.print(f"\n[bold]Total vulnerabilities found: [red]{total_vulns}[/red][/bold]")
 
 
 if __name__ == "__main__":
