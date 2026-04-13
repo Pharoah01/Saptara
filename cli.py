@@ -162,35 +162,51 @@ def scan(ctx, target, categories, intensity, wait):
 
 @cli.command()
 @click.argument("orchestration_id")
+@click.option("--watch", "-w", is_flag=True, help="Poll every 3s until completed/failed")
 @click.pass_context
-def status(ctx, orchestration_id):
+def status(ctx, orchestration_id, watch):
     """Check status of a scan"""
     url = ctx.obj["orchestrator_url"]
     headers = auth_headers(ctx)
-    try:
+
+    def _fetch_and_print():
         resp = httpx.get(f"{url}/orchestration/{orchestration_id}/status",
                          headers=headers, timeout=10.0)
-        if resp.status_code == 200:
-            d = resp.json()
-            table = Table(title=f"📊 Scan Status")
-            table.add_column("Field", style="cyan")
-            table.add_column("Value", style="bold")
-            table.add_row("Orchestration ID", orchestration_id)
-            table.add_row("Status", d.get("status", "unknown"))
-            table.add_row("Progress", f"{d.get('progress', 0):.1f}%")
-            table.add_row("Current Stage", d.get("current_stage", "—"))
-            if d.get("error"):
-                table.add_row("Error", f"[red]{d['error']}[/red]")
-            if d.get("started_at"):
-                table.add_row("Started", str(d["started_at"]))
-            if d.get("completed_at"):
-                table.add_row("Completed", str(d["completed_at"]))
-            console.print(table)
-
-            for svc, svc_data in d.get("service_results", {}).items():
-                console.print(f"  {svc}: {svc_data.get('status', 'unknown')}")
-        else:
+        if resp.status_code != 200:
             console.print(f"[red]❌ {resp.status_code}: {resp.text}[/red]")
+            return None
+        d = resp.json()
+        table = Table(title="📊 Scan Status")
+        table.add_column("Field", style="cyan")
+        table.add_column("Value", style="bold")
+        table.add_row("Orchestration ID", orchestration_id)
+        table.add_row("Status", d.get("status", "unknown"))
+        table.add_row("Progress", f"{d.get('progress', 0):.1f}%")
+        table.add_row("Current Stage", d.get("current_stage", "—"))
+        if d.get("error"):
+            table.add_row("Error", f"[red]{d['error']}[/red]")
+        if d.get("started_at"):
+            table.add_row("Started", str(d["started_at"]))
+        if d.get("completed_at"):
+            table.add_row("Completed", str(d["completed_at"]))
+        console.print(table)
+        for svc, svc_data in d.get("service_results", {}).items():
+            console.print(f"  {svc}: {svc_data.get('status', 'unknown')}")
+        return d.get("status")
+
+    try:
+        if not watch:
+            _fetch_and_print()
+        else:
+            console.print("[dim]Watching — press Ctrl+C to stop[/dim]\n")
+            while True:
+                console.clear()
+                st = _fetch_and_print()
+                if st in ("completed", "failed", "cancelled"):
+                    break
+                time.sleep(3)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopped watching[/yellow]")
     except Exception as e:
         console.print(f"[red]❌ Error: {e}[/red]")
 

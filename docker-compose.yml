@@ -21,6 +21,7 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     environment:
+      - TZ=Asia/Kolkata
       - SERVICE_NAME=orchestrator
       - RELIC_ROLE=conductor
       - LOG_LEVEL=INFO
@@ -53,7 +54,8 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     environment:
-      - SERVICE_NAME=scanner
+      - TZ=Asia/Kolkata
+      - SERVICE_NAME=simulator
       - RELIC_ROLE=seeker
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge
