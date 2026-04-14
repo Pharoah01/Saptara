@@ -30,9 +30,9 @@ class ScannerEngine:
     def __init__(self):
         self.payload_db = PayloadDatabase()
 
-    # ------------------------------------------------------------------
+    # ------------
     # Entry point
-    # ------------------------------------------------------------------
+
 
     async def execute_scan(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
         logger.info(f"Starting scan {scan_id} for {config.target_url}")

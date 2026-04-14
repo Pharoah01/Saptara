@@ -596,7 +596,9 @@ def _wait_for_completion(url: str, oid: str, headers: dict):
         data = resp.json()
         _display_results_table(data)
         path = _save_results(data)
-        console.print(f"\n  [green][+] Results saved → {path}[/green]")
+        console.print(f"\n  [green][+] All results saved → {path}[/green]")
+        console.print(f"  [dim]Job ID : {oid}[/dim]")
+        console.print(f"  [dim]Use 'python cli.py results {oid}' to view again[/dim]")
     except Exception as e:
         console.print(f"  [red][!] Could not fetch results: {e}[/red]")
 
@@ -606,6 +608,10 @@ def _wait_for_completion(url: str, oid: str, headers: dict):
 # ---------------------------------------------------------------------------
 
 def _display_results_table(data: Dict[str, Any]):
+    """
+    Terminal output: category-level summary + only failed/vulnerable rows.
+    Every single test result is always written to the JSON file via _save_results().
+    """
     total_tests = 0
     total_vulns = 0
     total_failed = 0
@@ -629,31 +635,58 @@ def _display_results_table(data: Dict[str, Any]):
             console.print(f"  [dim]No results  (status: {st})[/dim]")
             continue
 
-        table = Table(
-            box=box.SIMPLE_HEAD,
-            show_edge=False,
-            padding=(0, 1),
-            expand=True,
-        )
-        table.add_column("STATUS",   width=6,  no_wrap=True)
-        table.add_column("SEV",      width=10, no_wrap=True)
-        table.add_column("CATEGORY", width=28, style="dim", no_wrap=True)
-        table.add_column("TEST",     width=38)
-        table.add_column("DETAILS",  style="dim")
-
+        # ── Category summary ──────────────────────────────────────────────
+        from collections import defaultdict
+        cat_stats: Dict[str, Dict] = defaultdict(lambda: {"total": 0, "vuln": 0, "fail": 0, "pass": 0})
         for r in results:
+            cat = r.get("category", "unknown")
             st  = r.get("status", "")
-            sev = r.get("vulnerability_level") or ""
-            det = r.get("details", "") or ""
-            table.add_row(
-                STATUS_ICONS.get(st, st),
-                SEVERITY_COLORS.get(sev, SEVERITY_COLORS[""]),
-                r.get("category", ""),
-                r.get("test_name", ""),
-                det[:72] + ("…" if len(det) > 72 else ""),
-            )
+            cat_stats[cat]["total"] += 1
+            if st == "vulnerable":
+                cat_stats[cat]["vuln"] += 1
+            elif st == "failed":
+                cat_stats[cat]["fail"] += 1
+            elif st in ("passed", "blocked"):
+                cat_stats[cat]["pass"] += 1
 
-        console.print(table)
+        cat_table = Table(box=box.SIMPLE_HEAD, show_edge=False, padding=(0, 1))
+        cat_table.add_column("CATEGORY",    style="dim",   width=32)
+        cat_table.add_column("TOTAL",       width=7,  justify="right")
+        cat_table.add_column("PASS",        width=7,  justify="right")
+        cat_table.add_column("FAIL",        width=7,  justify="right")
+        cat_table.add_column("VULN",        width=7,  justify="right")
+
+        for cat, s in sorted(cat_stats.items()):
+            vuln_str = f"[red]{s['vuln']}[/red]"   if s["vuln"]  else "[dim]0[/dim]"
+            fail_str = f"[yellow]{s['fail']}[/yellow]" if s["fail"] else "[dim]0[/dim]"
+            pass_str = f"[green]{s['pass']}[/green]"  if s["pass"] else "[dim]0[/dim]"
+            cat_table.add_row(cat, str(s["total"]), pass_str, fail_str, vuln_str)
+
+        console.print(cat_table)
+
+        # ── Only print rows that need attention ───────────────────────────
+        attention = [r for r in results if r.get("status") in ("vulnerable", "failed", "error")]
+        if attention:
+            console.print(f"  [bold]Issues requiring attention ({len(attention)}):[/bold]")
+            issue_table = Table(box=box.SIMPLE_HEAD, show_edge=False, padding=(0, 1), expand=True)
+            issue_table.add_column("STATUS",   width=6,  no_wrap=True)
+            issue_table.add_column("SEV",      width=10, no_wrap=True)
+            issue_table.add_column("CATEGORY", width=26, style="dim", no_wrap=True)
+            issue_table.add_column("TEST",     width=36)
+            issue_table.add_column("DETAILS",  style="dim")
+
+            for r in attention:
+                st  = r.get("status", "")
+                sev = r.get("vulnerability_level") or ""
+                det = r.get("details", "") or ""
+                issue_table.add_row(
+                    STATUS_ICONS.get(st, st),
+                    SEVERITY_COLORS.get(sev, SEVERITY_COLORS[""]),
+                    r.get("category", ""),
+                    r.get("test_name", ""),
+                    det[:70] + ("…" if len(det) > 70 else ""),
+                )
+            console.print(issue_table)
 
         vuln_c  = sum(1 for r in results if r.get("status") == "vulnerable")
         fail_c  = sum(1 for r in results if r.get("status") == "failed")
@@ -668,13 +701,14 @@ def _display_results_table(data: Dict[str, Any]):
             f"[yellow]{fail_c} failed[/yellow]"
         )
 
-    # Summary bar
+    # ── Final summary ─────────────────────────────────────────────────────
     console.print()
     console.print(Rule("[bold]Summary[/bold]"))
     console.print(f"  Total tests      : {total_tests}")
     console.print(f"  Vulnerable       : [red]{total_vulns}[/red]")
     console.print(f"  Failed checks    : [yellow]{total_failed}[/yellow]")
     console.print(f"  Completed at     : {_now_ist()}")
+    console.print(f"  [dim](Full test-by-test detail is in the saved JSON file)[/dim]")
 
 
 # ---------------------------------------------------------------------------

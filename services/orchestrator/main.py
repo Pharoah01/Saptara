@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
@@ -87,10 +87,7 @@ async def _reload_cache_from_db():
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
-    return JSONResponse(
-        content=generate_latest().decode(),
-        media_type=CONTENT_TYPE_LATEST,
-    )
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------

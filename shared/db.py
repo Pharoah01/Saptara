@@ -57,7 +57,7 @@ class ScanJobRow(Base):
     results_count = Column(Integer, default=0)
     vulnerabilities_found = Column(Integer, default=0)
     config = Column(JSON, nullable=True)
-    service_results = Column(JSON, nullable=True)   # orchestrator: full service result map
+    service_results = Column(JSON, nullable=True)   
     error = Column(String, nullable=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -76,10 +76,6 @@ async def get_session() -> AsyncSession:
 
 
 def sanitize(value: str | None) -> str | None:
-    """
-    Strip null bytes from strings before inserting into PostgreSQL.
-    asyncpg raises CharacterNotInRepertoireError on \\x00 in UTF-8 columns.
-    """
     if value is None:
         return None
     return value.replace("\x00", "")

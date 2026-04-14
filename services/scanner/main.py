@@ -4,7 +4,7 @@ FastAPI-based microservice for comprehensive vulnerability scanning
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -75,10 +75,7 @@ async def _reload_cache_from_db():
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
-    return JSONResponse(
-        content=generate_latest().decode(),
-        media_type=CONTENT_TYPE_LATEST,
-    )
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------
