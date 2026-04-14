@@ -1,0 +1,261 @@
+SAPTARA ACADEMIC AND RESEARCH LICENSE
+Version 1.0 — April 2026
+
+Copyright (c) 2026 SAPTARA Project Contributors
+All rights reserved.
+
+================================================================================
+PREAMBLE
+================================================================================
+
+This license governs the use, reproduction, modification, and distribution of
+the SAPTARA software framework ("the Software"), which is a web application
+vulnerability assessment tool developed as an academic project. The purpose of
+this license is to permit free use of the Software for academic, research, and
+personal learning purposes while prohibiting commercial exploitation, misuse
+against systems without authorisation, and redistribution without proper
+attribution.
+
+The authors believe that security research tools should be freely available to
+the academic and security research community. At the same time, the authors
+recognise that such tools carry inherent risks if misused and therefore impose
+conditions designed to promote responsible and ethical use.
+
+================================================================================
+SECTION 1 — DEFINITIONS
+================================================================================
+
+1.1 "Software" means the SAPTARA source code, documentation, configuration
+    files, scripts, and all associated materials distributed under this license.
+
+1.2 "Contributor" means any individual or entity that has submitted code,
+    documentation, or other materials to the Software.
+
+1.3 "Derivative Work" means any work that is based on or derived from the
+    Software, including modifications, translations, adaptations, or works that
+    incorporate substantial portions of the Software.
+
+1.4 "Authorised Target" means a system, application, or network that the user
+    owns, operates, or has received explicit written permission from the owner
+    to test.
+
+1.5 "Commercial Use" means any use of the Software primarily intended for or
+    directed toward commercial advantage or monetary compensation, including
+    but not limited to offering the Software as a service, incorporating it
+    into a commercial product, or using it to generate revenue.
+
+1.6 "Academic Use" means use of the Software for non-commercial educational
+    purposes, academic research, coursework, thesis work, or personal learning,
+    where no monetary compensation is received for the use of the Software.
+
+================================================================================
+SECTION 2 — GRANT OF RIGHTS
+================================================================================
+
+Subject to the terms and conditions of this license, each Contributor hereby
+grants to you a worldwide, royalty-free, non-exclusive license to:
+
+2.1 Use the Software for Academic Use and personal security research on
+    Authorised Targets.
+
+2.2 Copy and distribute verbatim copies of the Software, provided that you
+    retain all copyright notices, this license, and the ethical use disclaimer
+    in all copies.
+
+2.3 Modify the Software and create Derivative Works for Academic Use, provided
+    that:
+    (a) You clearly mark all modifications as your own and do not misrepresent
+        the original Software;
+    (b) You distribute any Derivative Work under the same terms as this license
+        or a more restrictive license;
+    (c) You include a prominent notice stating that you have modified the
+        Software and the date of modification.
+
+2.4 Use the Software in academic publications, theses, dissertations, and
+    research papers, provided that you cite the Software appropriately in
+    accordance with Section 5.
+
+================================================================================
+SECTION 3 — RESTRICTIONS
+================================================================================
+
+The following uses are expressly prohibited:
+
+3.1 UNAUTHORISED TESTING. You may not use the Software to test, probe, scan,
+    or attack any system, application, network, or service that you do not own
+    or for which you do not have explicit written authorisation from the owner.
+    Unauthorised use of this Software against third-party systems may constitute
+    a criminal offence under applicable law, including but not limited to the
+    Computer Fraud and Abuse Act (United States), the Computer Misuse Act
+    (United Kingdom), and equivalent legislation in other jurisdictions.
+
+3.2 COMMERCIAL USE. You may not use the Software for Commercial Use without
+    obtaining a separate commercial license from the copyright holders. This
+    includes but is not limited to:
+    (a) Offering the Software or its functionality as a paid service;
+    (b) Incorporating the Software into a commercial security product;
+    (c) Using the Software to perform paid penetration testing engagements
+        without a commercial license;
+    (d) Selling, licensing, or sublicensing the Software for monetary
+        compensation.
+
+3.3 MALICIOUS USE. You may not use the Software to:
+    (a) Gain unauthorised access to any computer system or network;
+    (b) Disrupt, damage, or degrade the availability of any service;
+    (c) Steal, exfiltrate, or compromise personal data or confidential
+        information;
+    (d) Facilitate any activity that violates applicable law.
+
+3.4 MISREPRESENTATION. You may not remove or alter copyright notices, license
+    terms, or attribution statements from the Software or any Derivative Work.
+    You may not represent the Software as your own original work without
+    acknowledging the original authors.
+
+3.5 PATENT USE. This license does not grant any rights to use any patent claims
+    of any Contributor. If you institute patent litigation against any entity
+    alleging that the Software infringes a patent, your rights under this
+    license terminate automatically.
+
+================================================================================
+SECTION 4 — ETHICAL USE REQUIREMENTS
+================================================================================
+
+4.1 AUTHORISATION REQUIREMENT. Before using the Software against any target,
+    you must obtain and retain written authorisation from the owner of that
+    target. This authorisation must specify the scope of testing permitted,
+    the time period during which testing is authorised, and the contact
+    information of the authorising party.
+
+4.2 RESPONSIBLE DISCLOSURE. If you discover a vulnerability in a third-party
+    system while using the Software under authorised testing, you are encouraged
+    to follow responsible disclosure practices by notifying the affected
+    organisation privately and allowing a reasonable period for remediation
+    before public disclosure.
+
+4.3 DATA HANDLING. Any sensitive data, credentials, or personal information
+    discovered during authorised testing must be handled in accordance with
+    applicable data protection laws and the terms of your testing authorisation.
+    Such data must not be retained beyond the period necessary for the testing
+    engagement.
+
+4.4 SCOPE LIMITATION. You must not exceed the scope of your testing
+    authorisation. If your authorisation covers specific systems or endpoints,
+    you must not use the Software to test systems or endpoints outside that
+    scope.
+
+================================================================================
+SECTION 5 — ATTRIBUTION
+================================================================================
+
+5.1 If you use the Software in academic publications, research papers, theses,
+    or presentations, you must cite the Software as follows:
+
+    SAPTARA Project Contributors, "SAPTARA: Automated Web Application
+    Vulnerability Assessment Framework," 2026. [Online].
+    Available: [repository URL].
+
+5.2 If you create a Derivative Work, you must include a prominent notice in
+    the documentation and source code stating that the work is derived from
+    SAPTARA and providing a link to the original repository.
+
+5.3 You may not use the name "SAPTARA" or the names of the original
+    contributors to endorse or promote Derivative Works without prior written
+    permission.
+
+================================================================================
+SECTION 6 — DISCLAIMER OF WARRANTIES
+================================================================================
+
+6.1 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE, ACCURACY, COMPLETENESS, AND
+    NON-INFRINGEMENT.
+
+6.2 THE AUTHORS DO NOT WARRANT THAT THE SOFTWARE WILL DETECT ALL
+    VULNERABILITIES IN ANY TARGET SYSTEM, THAT THE RESULTS PRODUCED BY THE
+    SOFTWARE ARE FREE FROM FALSE POSITIVES OR FALSE NEGATIVES, OR THAT THE
+    SOFTWARE WILL OPERATE WITHOUT INTERRUPTION OR ERROR.
+
+6.3 SECURITY TESTING TOOLS BY THEIR NATURE INTERACT WITH LIVE SYSTEMS IN WAYS
+    THAT MAY CAUSE UNINTENDED EFFECTS. THE AUTHORS DO NOT WARRANT THAT USE OF
+    THE SOFTWARE WILL NOT CAUSE DISRUPTION, DATA LOSS, OR OTHER HARM TO THE
+    TARGET SYSTEM OR RELATED INFRASTRUCTURE.
+
+================================================================================
+SECTION 7 — LIMITATION OF LIABILITY
+================================================================================
+
+7.1 IN NO EVENT SHALL ANY CONTRIBUTOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+    INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING OUT OF
+    OR IN CONNECTION WITH THE USE OR INABILITY TO USE THE SOFTWARE, INCLUDING
+    BUT NOT LIMITED TO:
+    (a) Loss of data or profits;
+    (b) Business interruption;
+    (c) Legal liability arising from unauthorised use of the Software;
+    (d) Damage to third-party systems caused by use of the Software;
+    (e) Any claim by a third party arising from your use of the Software.
+
+7.2 THIS LIMITATION OF LIABILITY APPLIES REGARDLESS OF THE THEORY OF LIABILITY,
+    WHETHER IN CONTRACT, TORT, NEGLIGENCE, STRICT LIABILITY, OR OTHERWISE, EVEN
+    IF THE CONTRIBUTOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+7.3 YOU ASSUME FULL RESPONSIBILITY FOR ENSURING THAT YOUR USE OF THE SOFTWARE
+    COMPLIES WITH ALL APPLICABLE LAWS AND REGULATIONS AND THAT YOU HAVE
+    OBTAINED ALL NECESSARY AUTHORISATIONS BEFORE TESTING ANY TARGET SYSTEM.
+
+================================================================================
+SECTION 8 — TERMINATION
+================================================================================
+
+8.1 This license and the rights granted hereunder will terminate automatically
+    if you fail to comply with any term of this license.
+
+8.2 Upon termination, you must immediately cease all use of the Software and
+    destroy all copies in your possession.
+
+8.3 Sections 3, 4, 6, 7, and 9 shall survive termination of this license.
+
+================================================================================
+SECTION 9 — GOVERNING LAW AND JURISDICTION
+================================================================================
+
+9.1 This license shall be governed by and construed in accordance with the
+    laws of India, without regard to its conflict of law provisions.
+
+9.2 Any dispute arising under or in connection with this license shall be
+    subject to the exclusive jurisdiction of the courts of India.
+
+================================================================================
+SECTION 10 — MISCELLANEOUS
+================================================================================
+
+10.1 ENTIRE AGREEMENT. This license constitutes the entire agreement between
+     you and the Contributors with respect to the Software and supersedes all
+     prior or contemporaneous understandings regarding such subject matter.
+
+10.2 SEVERABILITY. If any provision of this license is held to be unenforceable,
+     such provision shall be modified to the minimum extent necessary to make
+     it enforceable, and the remaining provisions shall continue in full force.
+
+10.3 WAIVER. Failure by any Contributor to enforce any provision of this license
+     shall not constitute a waiver of that Contributor's right to enforce such
+     provision in the future.
+
+10.4 UPDATES. The Contributors reserve the right to publish updated versions of
+     this license. You may use the Software under the version of the license
+     under which you received it, or under any later version published by the
+     Contributors.
+
+================================================================================
+CONTACT
+================================================================================
+
+For commercial licensing inquiries, to report misuse, or for any other
+questions regarding this license, please open an issue in the project
+repository.
+
+================================================================================
+
+END OF LICENSE
+
+Copyright (c) 2026 SAPTARA Project Contributors. All rights reserved.
