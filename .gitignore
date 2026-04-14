@@ -12,6 +12,7 @@ eggs/
 lib/
 lib64/
 parts/
+report/
 sdist/
 var/
 Docs/
