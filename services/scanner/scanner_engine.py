@@ -7,6 +7,7 @@ import asyncio
 import ssl
 import socket
 import time
+import uuid
 import datetime
 from typing import List, Tuple, Optional
 from urllib.parse import urljoin, urlparse
@@ -95,7 +96,7 @@ class ScannerEngine:
                 for payload in payloads:
                     for method in methods:
                         inject_as = "query" if method == "GET" else "form"
-                        test_id = f"{scan_id}-sqli-{hash(endpoint + field + method + payload)}"
+                        test_id = f"{scan_id}-sqli-{uuid.uuid4().hex[:16]}"
                         resp = None
                         elapsed = 0.0
                         t0 = time.time()
@@ -220,7 +221,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, field, inject_as in targets:
                 for payload in payloads:
-                    test_id = f"{scan_id}-path-{hash(endpoint + field + payload)}"
+                    test_id = f"{scan_id}-path-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -315,7 +316,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, field, method, inject_as in targets:
                 for payload in payloads:
-                    test_id = f"{scan_id}-xss-{hash(endpoint + field + payload)}"
+                    test_id = f"{scan_id}-xss-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -428,7 +429,7 @@ class ScannerEngine:
 
         async with SecurityHTTPClient(config) as client:
             for description, endpoint, method, extra_headers, json_body, protected_codes in bypass_cases:
-                test_id = f"{scan_id}-auth-{hash(description + endpoint)}"
+                test_id = f"{scan_id}-auth-{uuid.uuid4().hex[:16]}"
                 resp = None
                 elapsed = 0.0
                 t0 = time.time()
@@ -518,7 +519,7 @@ class ScannerEngine:
 
         async with SecurityHTTPClient(config) as client:
             for endpoint, method, json_body, burst_count in rate_limit_targets:
-                test_id = f"{scan_id}-ratelimit-{hash(endpoint + method)}"
+                test_id = f"{scan_id}-ratelimit-{uuid.uuid4().hex[:16]}"
                 responses_429 = 0
                 first_429_at = None
                 errors = 0
@@ -609,7 +610,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for agent in malicious_agents:
                 for endpoint in probe_endpoints:
-                    test_id = f"{scan_id}-bot-{hash(agent + endpoint)}"
+                    test_id = f"{scan_id}-bot-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -676,7 +677,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint in sensitive_targets:
                 # Primary GET probe
-                test_id = f"{scan_id}-enum-{hash(endpoint)}"
+                test_id = f"{scan_id}-enum-{uuid.uuid4().hex[:16]}"
                 resp = None
                 elapsed = 0.0
                 t0 = time.time()
@@ -836,7 +837,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, file_field in upload_endpoints:
                 for description, filename, content_type, content, severity in upload_cases:
-                    test_id = f"{scan_id}-upload-{hash(description + endpoint)}"
+                    test_id = f"{scan_id}-upload-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -972,7 +973,7 @@ class ScannerEngine:
 
         async with SecurityHTTPClient(config) as client:
             for description, endpoint, method, patterns, check_headers, severity in disclosure_checks:
-                test_id = f"{scan_id}-info-{hash(description)}"
+                test_id = f"{scan_id}-info-{uuid.uuid4().hex[:16]}"
                 resp = None
                 elapsed = 0.0
                 t0 = time.time()
@@ -1099,7 +1100,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, method, json_body in csrf_targets:
                 for scenario_name, extra_headers in token_scenarios:
-                    test_id = f"{scan_id}-csrf-{hash(endpoint + method + scenario_name)}"
+                    test_id = f"{scan_id}-csrf-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -1233,7 +1234,7 @@ class ScannerEngine:
         ]
 
         for test_name, header_key, required_any, forbidden, severity, recommendation in header_checks:
-            test_id = f"{scan_id}-hdr-{hash(header_key)}"
+            test_id = f"{scan_id}-hdr-{uuid.uuid4().hex[:16]}"
             value = h.get(header_key, "")
 
             if not value:
@@ -1278,7 +1279,7 @@ class ScannerEngine:
              "Reveals ASP.NET MVC version — remove this header"),
         ]
         for test_name, header_key, recommendation in dangerous_present:
-            test_id = f"{scan_id}-hdr-leak-{hash(header_key)}"
+            test_id = f"{scan_id}-hdr-leak-{uuid.uuid4().hex[:16]}"
             value = h.get(header_key, "")
             if value:
                 status = TestStatus.VULNERABLE
@@ -1593,7 +1594,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, field, method, inject_as in targets:
                 for payload in payloads:
-                    test_id = f"{scan_id}-cmdi-{hash(endpoint + field + payload)}"
+                    test_id = f"{scan_id}-cmdi-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -1703,7 +1704,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, method in xml_endpoints:
                 for payload, description in xxe_payloads:
-                    test_id = f"{scan_id}-xxe-{hash(endpoint + description)}"
+                    test_id = f"{scan_id}-xxe-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -1789,7 +1790,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint in probe_endpoints:
                 for origin in evil_origins:
-                    test_id = f"{scan_id}-cors-{hash(endpoint + origin)}"
+                    test_id = f"{scan_id}-cors-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -1913,7 +1914,7 @@ class ScannerEngine:
         async with SecurityHTTPClient(config) as client:
             for endpoint, field, method, inject_as in ssrf_targets:
                 for ssrf_url, description in ssrf_payloads:
-                    test_id = f"{scan_id}-ssrf-{hash(endpoint + ssrf_url)}"
+                    test_id = f"{scan_id}-ssrf-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
@@ -2016,7 +2017,7 @@ class ScannerEngine:
             for endpoint_template, method in idor_endpoints:
                 for obj_id in id_values:
                     endpoint = endpoint_template.replace("{id}", obj_id)
-                    test_id = f"{scan_id}-idor-{hash(endpoint)}"
+                    test_id = f"{scan_id}-idor-{uuid.uuid4().hex[:16]}"
                     resp = None
                     elapsed = 0.0
                     t0 = time.time()
