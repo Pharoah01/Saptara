@@ -74,7 +74,7 @@ SAPTARA is a production-ready, microservices-based web application security test
 | 2 | **Simulator** | Receives scanner findings, executes multi-step exploit confirmation |
 | 3 | **Validator** | Independently confirms presence of security defences |
 
-The Simulator receives the Scanner's confirmed vulnerability categories and selects only the relevant attack scenarios — it never runs blind.
+The Simulator receives the Scanner's confirmed vulnerability categories and selects only the relevant attack scenarios - it never runs blind.
 
 ---
 
