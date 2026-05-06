@@ -22,29 +22,25 @@ class ValidatorEngine:
     async def execute_validation(self, config: ScanConfig, validation_id: str) -> List[TestResult]:
         """Execute security feature validation"""
         logger.info(f"Starting validation {validation_id} for {config.target_url}")
-        
-        results = []
-        
-        # Execute validation tests
-        validation_tests = [
-            self._validate_bot_protection,
-            self._validate_security_middleware,
-            self._validate_rate_limiting,
-            self._validate_session_security,
-            self._validate_csrf_protection,
-            self._validate_input_validation,
-            self._validate_security_headers,
-            self._validate_robots_txt
-        ]
-        
-        for test_func in validation_tests:
+
+        async def _run(fn):
             try:
-                test_results = await test_func(config, validation_id)
-                results.extend(test_results)
-                await asyncio.sleep(config.delay)
+                return await fn(config, validation_id)
             except Exception as e:
-                logger.error(f"Validation test {test_func.__name__} failed: {e}")
-        
+                logger.error(f"Validation test {fn.__name__} failed: {e}")
+                return []
+
+        batches = await asyncio.gather(*[
+            _run(self._validate_bot_protection),
+            _run(self._validate_security_middleware),
+            _run(self._validate_rate_limiting),
+            _run(self._validate_session_security),
+            _run(self._validate_csrf_protection),
+            _run(self._validate_input_validation),
+            _run(self._validate_security_headers),
+            _run(self._validate_robots_txt),
+        ])
+        results = [r for batch in batches for r in batch]
         logger.info(f"Validation {validation_id} completed with {len(results)} results")
         return results
     

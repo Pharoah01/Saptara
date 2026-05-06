@@ -36,16 +36,21 @@ class ScannerEngine:
 
     async def execute_scan(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
         logger.info(f"Starting scan {scan_id} for {config.target_url}")
-        results = []
-        for category in config.test_categories:
-            if config.is_category_enabled(category):
-                logger.info(f"Testing category: {category}")
-                try:
-                    category_results = await self._test_category(category, config, scan_id)
-                    results.extend(category_results)
-                except Exception as e:
-                    logger.error(f"Category {category} failed: {e}")
-                await asyncio.sleep(config.delay)
+
+        async def _run_category(category: TestCategory):
+            if not config.is_category_enabled(category):
+                return []
+            logger.info(f"Testing category: {category}")
+            try:
+                return await self._test_category(category, config, scan_id)
+            except Exception as e:
+                logger.error(f"Category {category} failed: {e}")
+                return []
+
+        category_results = await asyncio.gather(
+            *[_run_category(c) for c in config.test_categories]
+        )
+        results = [r for batch in category_results for r in batch]
         logger.info(f"Scan {scan_id} completed — {len(results)} results")
         return results
 
@@ -82,7 +87,6 @@ class ScannerEngine:
     # ------------------------------------------------------------------
 
     async def _test_sql_injection(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
-        results = []
         payloads = self.payload_db.get_sql_injection_payloads()
         endpoints = self.payload_db.get_injectable_endpoints()
         ic = config.get_intensity_config()
@@ -92,41 +96,44 @@ class ScannerEngine:
             endpoints = endpoints[: ic["max_endpoints"]]
 
         async with SecurityHTTPClient(config) as client:
-            for endpoint, field, methods in endpoints:
-                for payload in payloads:
-                    for method in methods:
-                        inject_as = "query" if method == "GET" else "form"
-                        test_id = f"{scan_id}-sqli-{uuid.uuid4().hex[:16]}"
-                        resp = None
-                        elapsed = 0.0
-                        t0 = time.time()
-                        try:
-                            resp = await client.make_async_request(
-                                method, endpoint, payload,
-                                inject_as=inject_as, field_name=field,
-                            )
-                            elapsed = time.time() - t0
-                            status, level, details = self._analyze_sql_response(resp, payload, elapsed)
-                        except Exception as e:
-                            status, level, details = TestStatus.ERROR, None, str(e)
+            async def _probe(endpoint, field, method, payload):
+                inject_as = "query" if method == "GET" else "form"
+                test_id = f"{scan_id}-sqli-{uuid.uuid4().hex[:16]}"
+                resp = None
+                elapsed = 0.0
+                t0 = time.time()
+                try:
+                    resp = await client.make_async_request(
+                        method, endpoint, payload,
+                        inject_as=inject_as, field_name=field,
+                    )
+                    elapsed = time.time() - t0
+                    status, level, details = self._analyze_sql_response(resp, payload, elapsed)
+                except Exception as e:
+                    status, level, details = TestStatus.ERROR, None, str(e)
+                return TestResult(
+                    id=test_id,
+                    category="SQL Injection",
+                    test_name=f"SQLi {method} {endpoint} [{field}]",
+                    status=status,
+                    vulnerability_level=level,
+                    target_url=urljoin(config.target_url, endpoint),
+                    method=method,
+                    payload=payload,
+                    response_code=getattr(resp, "status", None),
+                    response_time=elapsed,
+                    service_name="scanner",
+                    details=details,
+                    recommendations=_sqli_recommendation(level),
+                )
 
-                        results.append(TestResult(
-                            id=test_id,
-                            category="SQL Injection",
-                            test_name=f"SQLi {method} {endpoint} [{field}]",
-                            status=status,
-                            vulnerability_level=level,
-                            target_url=urljoin(config.target_url, endpoint),
-                            method=method,
-                            payload=payload,
-                            response_code=getattr(resp, "status", None),
-                            response_time=elapsed,
-                            service_name="scanner",
-                            details=details,
-                            recommendations=_sqli_recommendation(level),
-                        ))
-                        await asyncio.sleep(config.delay)
-        return results
+            tasks = [
+                _probe(endpoint, field, method, payload)
+                for endpoint, field, methods in endpoints
+                for payload in payloads
+                for method in methods
+            ]
+            return list(await asyncio.gather(*tasks))
 
     def _analyze_sql_response(self, resp, payload: str, elapsed: float) -> Tuple:
         body = getattr(resp, "text_content", "").lower()
@@ -201,7 +208,6 @@ class ScannerEngine:
     # ------------------------------------------------------------------
 
     async def _test_path_traversal(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
-        results = []
         payloads = self.payload_db.get_path_traversal_payloads()
         ic = config.get_intensity_config()
         if ic["max_payloads"]:
@@ -219,39 +225,42 @@ class ScannerEngine:
         ]
 
         async with SecurityHTTPClient(config) as client:
-            for endpoint, field, inject_as in targets:
-                for payload in payloads:
-                    test_id = f"{scan_id}-path-{uuid.uuid4().hex[:16]}"
-                    resp = None
-                    elapsed = 0.0
-                    t0 = time.time()
-                    try:
-                        resp = await client.make_async_request(
-                            "GET", endpoint, payload,
-                            inject_as=inject_as, field_name=field,
-                        )
-                        elapsed = time.time() - t0
-                        status, level, details = self._analyze_path_traversal_response(resp, payload)
-                    except Exception as e:
-                        status, level, details = TestStatus.ERROR, None, str(e)
+            async def _probe(endpoint, field, inject_as, payload):
+                test_id = f"{scan_id}-path-{uuid.uuid4().hex[:16]}"
+                resp = None
+                elapsed = 0.0
+                t0 = time.time()
+                try:
+                    resp = await client.make_async_request(
+                        "GET", endpoint, payload,
+                        inject_as=inject_as, field_name=field,
+                    )
+                    elapsed = time.time() - t0
+                    status, level, details = self._analyze_path_traversal_response(resp, payload)
+                except Exception as e:
+                    status, level, details = TestStatus.ERROR, None, str(e)
+                return TestResult(
+                    id=test_id,
+                    category="Path Traversal",
+                    test_name=f"Path Traversal {endpoint} [{field}]",
+                    status=status,
+                    vulnerability_level=level,
+                    target_url=urljoin(config.target_url, endpoint),
+                    method="GET",
+                    payload=payload,
+                    response_code=getattr(resp, "status", None),
+                    response_time=elapsed,
+                    service_name="scanner",
+                    details=details,
+                    recommendations="Validate and sanitize file paths; use allowlists; chroot/jail file access",
+                )
 
-                    results.append(TestResult(
-                        id=test_id,
-                        category="Path Traversal",
-                        test_name=f"Path Traversal {endpoint} [{field}]",
-                        status=status,
-                        vulnerability_level=level,
-                        target_url=urljoin(config.target_url, endpoint),
-                        method="GET",
-                        payload=payload,
-                        response_code=getattr(resp, "status", None),
-                        response_time=elapsed,
-                        service_name="scanner",
-                        details=details,
-                        recommendations="Validate and sanitize file paths; use allowlists; chroot/jail file access",
-                    ))
-                    await asyncio.sleep(config.delay)
-        return results
+            tasks = [
+                _probe(endpoint, field, inject_as, payload)
+                for endpoint, field, inject_as in targets
+                for payload in payloads
+            ]
+            return list(await asyncio.gather(*tasks))
 
     def _analyze_path_traversal_response(self, resp, payload: str) -> Tuple:
         body = getattr(resp, "text_content", "")
@@ -297,7 +306,6 @@ class ScannerEngine:
     # ------------------------------------------------------------------
 
     async def _test_xss(self, config: ScanConfig, scan_id: str) -> List[TestResult]:
-        results = []
         payloads = self.payload_db.get_xss_payloads()
         ic = config.get_intensity_config()
         if ic["max_payloads"]:
@@ -314,39 +322,42 @@ class ScannerEngine:
         ]
 
         async with SecurityHTTPClient(config) as client:
-            for endpoint, field, method, inject_as in targets:
-                for payload in payloads:
-                    test_id = f"{scan_id}-xss-{uuid.uuid4().hex[:16]}"
-                    resp = None
-                    elapsed = 0.0
-                    t0 = time.time()
-                    try:
-                        resp = await client.make_async_request(
-                            method, endpoint, payload,
-                            inject_as=inject_as, field_name=field,
-                        )
-                        elapsed = time.time() - t0
-                        status, level, details = self._analyze_xss_response(resp, payload)
-                    except Exception as e:
-                        status, level, details = TestStatus.ERROR, None, str(e)
+            async def _probe(endpoint, field, method, inject_as, payload):
+                test_id = f"{scan_id}-xss-{uuid.uuid4().hex[:16]}"
+                resp = None
+                elapsed = 0.0
+                t0 = time.time()
+                try:
+                    resp = await client.make_async_request(
+                        method, endpoint, payload,
+                        inject_as=inject_as, field_name=field,
+                    )
+                    elapsed = time.time() - t0
+                    status, level, details = self._analyze_xss_response(resp, payload)
+                except Exception as e:
+                    status, level, details = TestStatus.ERROR, None, str(e)
+                return TestResult(
+                    id=test_id,
+                    category="XSS",
+                    test_name=f"XSS {method} {endpoint} [{field}]",
+                    status=status,
+                    vulnerability_level=level,
+                    target_url=urljoin(config.target_url, endpoint),
+                    method=method,
+                    payload=payload,
+                    response_code=getattr(resp, "status", None),
+                    response_time=elapsed,
+                    service_name="scanner",
+                    details=details,
+                    recommendations="Encode all user output; enforce strict CSP; use HTTPOnly cookies",
+                )
 
-                    results.append(TestResult(
-                        id=test_id,
-                        category="XSS",
-                        test_name=f"XSS {method} {endpoint} [{field}]",
-                        status=status,
-                        vulnerability_level=level,
-                        target_url=urljoin(config.target_url, endpoint),
-                        method=method,
-                        payload=payload,
-                        response_code=getattr(resp, "status", None),
-                        response_time=elapsed,
-                        service_name="scanner",
-                        details=details,
-                        recommendations="Encode all user output; enforce strict CSP; use HTTPOnly cookies",
-                    ))
-                    await asyncio.sleep(config.delay)
-        return results
+            tasks = [
+                _probe(endpoint, field, method, inject_as, payload)
+                for endpoint, field, method, inject_as in targets
+                for payload in payloads
+            ]
+            return list(await asyncio.gather(*tasks))
 
     def _analyze_xss_response(self, resp, payload: str) -> Tuple:
         body = getattr(resp, "text_content", "")
@@ -496,7 +507,6 @@ class ScannerEngine:
                     details=details,
                     recommendations="Enforce strict JWT validation; disable alg=none; use strong credential policies; validate all auth headers server-side",
                 ))
-                await asyncio.sleep(config.delay)
 
         return results
 
@@ -658,7 +668,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Implement UA-based bot detection; use CAPTCHA; integrate threat intelligence feeds",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -736,7 +745,6 @@ class ScannerEngine:
                     details=details,
                     recommendations="Disable debug/admin endpoints in production; enforce authentication on all API routes",
                 ))
-                await asyncio.sleep(config.delay)
 
             # TRACE method check (enables XST attacks)
             trace_test_id = f"{scan_id}-enum-trace"
@@ -898,7 +906,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Validate file type by magic bytes not extension; store uploads outside webroot; scan with AV; restrict execution permissions",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -1049,7 +1056,6 @@ class ScannerEngine:
                     details=details,
                     recommendations="Disable debug mode in production; restrict access to config/backup files; suppress server version headers; implement proper error pages",
                 ))
-                await asyncio.sleep(config.delay)
 
         return results
 
@@ -1166,7 +1172,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Use SameSite=Strict cookies; validate CSRF tokens server-side; check Origin/Referer headers; use double-submit cookie pattern",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -1651,7 +1656,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Never pass user input to shell commands; use subprocess with argument lists; whitelist allowed values",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -1761,7 +1765,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Disable external entity processing in XML parsers; use JSON where possible; validate and sanitize XML input",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -1852,7 +1855,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Validate Origin against an explicit allowlist; never reflect arbitrary origins; never combine wildcard with credentials=true",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -1977,7 +1979,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Validate and allowlist URLs; block private/loopback ranges; disable unused URL schemes; use a dedicated egress proxy",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 
@@ -2072,7 +2073,6 @@ class ScannerEngine:
                         details=details,
                         recommendations="Enforce object-level authorization on every endpoint; use indirect references (UUIDs); verify ownership server-side on every request",
                     ))
-                    await asyncio.sleep(config.delay)
 
         return results
 

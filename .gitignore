@@ -6,6 +6,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+SAPTARA_DOCUMENTATION.md
 downloads/
 eggs/
 .eggs/

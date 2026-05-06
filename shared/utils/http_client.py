@@ -79,6 +79,7 @@ class SecurityHTTPClient:
             headers=headers,
             connector=connector,
         )
+        self._semaphore = asyncio.Semaphore(self.config.max_concurrent)
         return self
 
     async def __aexit__(self, *_):
@@ -152,18 +153,19 @@ class SecurityHTTPClient:
 
         start = time.time()
         try:
-            async with self.async_session.request(
-                method,
-                url,
-                params=params,
-                data=data,
-                json=json_data,
-                headers=req_headers,
-                allow_redirects=allow_redirects,
-            ) as resp:
-                resp.request_time = time.time() - start
-                resp.text_content = await resp.text(errors="replace")
-                return resp
+            async with self._semaphore:
+                async with self.async_session.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    json=json_data,
+                    headers=req_headers,
+                    allow_redirects=allow_redirects,
+                ) as resp:
+                    resp.request_time = time.time() - start
+                    resp.text_content = await resp.text(errors="replace")
+                    return resp
         except aiohttp.ClientConnectorError as e:
             logger.debug(f"Connection refused: {url} — {e}")
             return MockResponse(str(e))

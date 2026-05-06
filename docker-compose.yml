@@ -141,6 +141,31 @@ services:
     networks:
       - saptara-network
 
+  # Redis Exporter - exposes Redis metrics for Prometheus
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      - redis
+    networks:
+      - saptara-network
+
+  # Postgres Exporter - exposes PostgreSQL metrics for Prometheus
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      - DATA_SOURCE_NAME=postgresql://saptara_keeper:seven_relics_unite@database:5432/saptara_knowledge?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - saptara-network
+
   # The Observer - The Watcher (Metrics)
   prometheus:
     image: prom/prometheus:latest
@@ -148,6 +173,7 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
     networks:
       - saptara-network
 
@@ -156,7 +182,10 @@ services:
     image: grafana/loki:latest
     ports:
       - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/loki-config.yml
+      - saptara_loki:/loki
+    command: -config.file=/etc/loki/loki-config.yml
     networks:
       - saptara-network
 
@@ -181,14 +210,21 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=saptara_vision
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
     volumes:
       - saptara_vision:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+      - loki
     networks:
       - saptara-network
 
 volumes:
   saptara_memory:
   saptara_vision:
+  saptara_loki:
 
 networks:
   saptara-network:

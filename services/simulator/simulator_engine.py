@@ -52,17 +52,19 @@ class SimulatorEngine:
             "penetration_testing": self._simulate_penetration_testing,
         }
 
-        for scenario in scenarios:
+        async def _run_scenario(scenario: str):
             fn = scenario_map.get(scenario)
-            if fn:
-                try:
-                    scenario_results = await fn(config, simulation_id)
-                    results.extend(scenario_results)
-                except Exception as e:
-                    logger.error(f"Scenario {scenario} failed: {e}")
-            else:
+            if not fn:
                 logger.warning(f"Unknown scenario: {scenario}")
-            await asyncio.sleep(config.delay)
+                return []
+            try:
+                return await fn(config, simulation_id)
+            except Exception as e:
+                logger.error(f"Scenario {scenario} failed: {e}")
+                return []
+
+        batches = await asyncio.gather(*[_run_scenario(s) for s in scenarios])
+        results = [r for batch in batches for r in batch]
 
         logger.info(f"Simulation {simulation_id} completed — {len(results)} results")
         return results
@@ -177,7 +179,6 @@ class SimulatorEngine:
                         elapsed if resp else None, detail,
                         "Use parameterised queries; never concatenate user input into SQL",
                     ))
-                    await asyncio.sleep(config.delay)
 
             # ── 1b. Reflected XSS confirmation ───────────────────────────
             xss_payloads = [
@@ -225,7 +226,6 @@ class SimulatorEngine:
                         elapsed if resp else None, detail,
                         "Encode all output; enforce strict CSP; use HTTPOnly cookies",
                     ))
-                    await asyncio.sleep(config.delay)
 
             # ── 1c. Open redirect ─────────────────────────────────────────
             redirect_payloads = [
@@ -272,7 +272,6 @@ class SimulatorEngine:
                         elapsed if resp else None, detail,
                         "Validate redirect targets against an allowlist; never reflect raw user input as Location",
                     ))
-                    await asyncio.sleep(config.delay)
 
             # ── 1d. Host header injection ─────────────────────────────────
             host_payloads = [
@@ -309,7 +308,6 @@ class SimulatorEngine:
                     elapsed if resp else None, detail,
                     "Validate Host header against a whitelist; never use it to build URLs",
                 ))
-                await asyncio.sleep(config.delay)
 
         return results
 
@@ -373,7 +371,6 @@ class SimulatorEngine:
                 lvl, poison_username, None, elapsed, detail,
                 "Parameterise every query that reads stored data, not just input-time queries",
             ))
-            await asyncio.sleep(config.delay)
 
             # ── 2b. Stored XSS retrieval ──────────────────────────────────
             # Step 1: POST a comment/message with an XSS payload.
@@ -411,7 +408,6 @@ class SimulatorEngine:
                 lvl, xss_payload, None, elapsed, detail,
                 "HTML-encode all stored user content on output; enforce strict CSP",
             ))
-            await asyncio.sleep(config.delay)
 
             # ── 2c. Session fixation ──────────────────────────────────────
             # Provide a known session ID before login; check if it's accepted post-login.
@@ -446,7 +442,6 @@ class SimulatorEngine:
                 lvl, fixed_session, None, elapsed, detail,
                 "Always issue a new session ID on authentication; invalidate pre-auth sessions",
             ))
-            await asyncio.sleep(config.delay)
 
             # ── 2d. Mass assignment / privilege escalation ────────────────
             # POST extra privileged fields alongside a normal update.
@@ -488,7 +483,6 @@ class SimulatorEngine:
                     elapsed, detail,
                     "Use explicit allowlists for writable fields; never bind raw request bodies to models",
                 ))
-                await asyncio.sleep(config.delay)
 
             # ── 2e. CSRF token bypass ─────────────────────────────────────
             # Attempt state-changing POST with no CSRF token, wrong token, and
@@ -531,7 +525,6 @@ class SimulatorEngine:
                     elapsed, detail,
                     "Enforce CSRF tokens on all state-changing endpoints; use SameSite=Strict cookies",
                 ))
-                await asyncio.sleep(config.delay)
 
         return results
 
@@ -595,7 +588,6 @@ class SimulatorEngine:
                 lvl, str(race_body), None, elapsed, detail,
                 "Use database-level atomic operations or distributed locks for one-time actions",
             ))
-            await asyncio.sleep(config.delay)
 
             # ── 3b. IDOR — sequential object enumeration ──────────────────
             # Access other users' resources by iterating numeric IDs.
@@ -619,7 +611,6 @@ class SimulatorEngine:
                             vulnerable_ids.append(obj_id)
                     except Exception:
                         pass
-                    await asyncio.sleep(config.delay)
 
                 if vulnerable_ids:
                     st = TestStatus.VULNERABLE
@@ -672,7 +663,6 @@ class SimulatorEngine:
                         elapsed, detail,
                         "Explicitly restrict allowed HTTP methods per endpoint; return 405 for disallowed verbs",
                     ))
-                    await asyncio.sleep(config.delay)
 
             # ── 3d. JWT RS256 → HS256 algorithm confusion ─────────────────
             # If the server uses RS256, an attacker can sign a token with
@@ -715,7 +705,6 @@ class SimulatorEngine:
                 elapsed, detail,
                 "Pin the expected algorithm server-side; never accept alg from the token header",
             ))
-            await asyncio.sleep(config.delay)
 
             # ── 3e. GraphQL introspection & batch query abuse ─────────────
             graphql_endpoints = ["/graphql", "/api/graphql", "/graphql/"]
@@ -756,7 +745,6 @@ class SimulatorEngine:
                     elapsed, detail,
                     "Disable introspection in production; implement query depth/complexity limits",
                 ))
-                await asyncio.sleep(config.delay)
 
                 # Batch query abuse
                 t0 = time.time()
@@ -789,7 +777,6 @@ class SimulatorEngine:
                     elapsed, detail,
                     "Disable or rate-limit batch queries; enforce per-query complexity limits",
                 ))
-                await asyncio.sleep(config.delay)
 
             # ── 3f. Insecure file download (path + UUID bypass) ───────────
             # Try to download files belonging to other users by guessing
@@ -831,6 +818,5 @@ class SimulatorEngine:
                     elapsed, detail,
                     "Verify file ownership server-side on every download; use signed short-lived URLs",
                 ))
-                await asyncio.sleep(config.delay)
 
         return results
